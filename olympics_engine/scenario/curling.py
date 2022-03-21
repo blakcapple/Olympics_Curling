@@ -2,6 +2,7 @@ from olympics_engine.core import OlympicsBase
 from olympics_engine.viewer import Viewer, debug
 from olympics_engine.objects import Ball, Agent
 from pathlib import Path
+import pdb
 CURRENT_PATH = str(Path(__file__).resolve().parent.parent)
 
 import numpy as np
@@ -204,7 +205,7 @@ class curling(OlympicsBase):
 
         self.agent_list.append(new_agent)
         self.agent_init_pos[-1] = self.start_pos
-        new_boundary = self.get_obs_boundaray(self.start_pos, 15, 300)
+        new_boundary = self.get_obs_boundaray(self.start_pos, 15, self.vis)
         self.obs_boundary_init.append(new_boundary)
         self.agent_num += 1
 
@@ -300,7 +301,12 @@ class curling(OlympicsBase):
                     del self.agent_theta[-1]
                     del self.agent_accel[-1]
                     self.agent_num -= 1
-
+                if self.release:
+                    reward = 1 / (self.get_reward() + 1) * 1000# distance reward 
+                    # if len(self.agent_pos) == (self.best_agent()+1):
+                    #     reward += 10 
+                else:
+                    reward = -10 # if not release, give penalty 
                 self.temp_winner, min_d = self.current_winner()
                 #step_reward = [1,0.] if self.temp_winner == 0 else [0., 1]          #score for each round
                 if self.temp_winner == -1:
@@ -313,13 +319,19 @@ class curling(OlympicsBase):
                     raise NotImplementedError
 
 
+
                 obs_next = self._reset_round()
 
             else:
                 step_reward = [0., 0.]
-
+                reward = 0
         else:
-
+            if self.release:
+                reward = 1 / (self.get_reward() + 1) * 1000# distance reward 
+                # if len(self.agent_pos) == (self.best_agent()+1):
+                #     reward += 10 
+            else:
+                reward = -10 # if not release, give penalty 
             if self.game_round == 1:
                 # self.final_winner, min_d = self.current_winner()
                 # self.temp_winner = self.final_winner
@@ -349,7 +361,7 @@ class curling(OlympicsBase):
                 self.game_round += 1
                 next_obs = self.reset(reset_game=True)
 
-                return next_obs, step_reward, False, 'game1 ends, switch position'
+                return next_obs, reward, False, 'game1 ends, switch position'
             else:
                 raise NotImplementedError
 
@@ -365,23 +377,23 @@ class curling(OlympicsBase):
             self.gamma = h_gamma
 
         #return self.agent_pos, self.agent_v, self.agent_accel, self.agent_theta, obs_next, step_reward, done
-        return obs_next, step_reward, done, ''
+        return obs_next, reward, done, ''
 
-    def get_obs_encode(self):
-        obs = self.get_obs()
-        if self.current_team == 0:
-            return [obs, np.zeros_like(obs)]
-        else:
-            return [np.zeros_like(obs), obs]
+    # def get_obs_encode(self):
+    #     obs = self.get_obs()
+    #     if self.current_team == 0:
+    #         return [obs, np.zeros_like(obs)]
+    #     else:
+    #         return [np.zeros_like(obs), obs]
 
 
 
     def get_reward(self):
 
         center = [300, 500]
-        pos = self.agent_pos[0]
+        pos = self.agent_pos[-1]
         distance = math.sqrt((pos[0]-center[0])**2 + (pos[1]-center[1])**2)
-        return [distance]
+        return distance
 
     def is_terminal(self):
 
@@ -447,6 +459,22 @@ class curling(OlympicsBase):
                 min_dist = distance
 
         return win_team, min_dist
+
+    def best_agent(self):
+        
+        """
+        if this throwing is best in the field 
+        """
+        center = [300, 500]
+        min_dist = 1e4
+        best_agent = -1
+        for i, agent in enumerate(self.agent_list):
+            pos = self.agent_pos[i]
+            distance = math.sqrt((pos[0]-center[0])**2 + (pos[1]-center[1])**2)
+            if distance < min_dist:
+                best_agent = i
+                min_dist = distance
+        return best_agent 
 
     def cal_game_point(self):
 

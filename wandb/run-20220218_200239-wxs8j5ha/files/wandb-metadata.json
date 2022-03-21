@@ -1,0 +1,24 @@
+{
+    "os": "Linux-5.11.0-43-generic-x86_64-with-glibc2.31",
+    "python": "3.9.6",
+    "heartbeatAt": "2022-02-18T12:02:46.155552",
+    "startedAt": "2022-02-18T12:02:39.008785",
+    "docker": null,
+    "gpu": "NVIDIA GeForce GTX 1080 Ti",
+    "gpu_count": 1,
+    "cpu_count": 12,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "/home/ryd/JIDI_Competition/rl_trainer/main.py",
+    "codePath": "rl_trainer/main.py",
+    "git": {
+        "remote": "git@github.com:blakcapple/JIDI_Competition.git",
+        "commit": "5f7f4afaec577d2c2a13e8cf23e05228a69463ae"
+    },
+    "email": "724533614@qq.com",
+    "root": "/home/ryd/JIDI_Competition",
+    "host": "ryd-super",
+    "username": "ryd",
+    "executable": "/home/ryd/miniconda3/envs/rl/bin/python"
+}

@@ -1,0 +1,13 @@
+device cuda:0
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+2022-02-18 20:03:41,782, INFO: model_score: tensor([], dtype=torch.float64)
+Backend TkAgg is interactive backend. Turning interactive mode on.
+Backend TkAgg is interactive backend. Turning interactive mode on.
+/home/ryd/miniconda3/envs/rl/lib/python3.9/site-packages/numpy/core/fromnumeric.py:3440: RuntimeWarning: Mean of empty slice.
+  return _methods._mean(a, axis=axis, dtype=dtype,
+/home/ryd/miniconda3/envs/rl/lib/python3.9/site-packages/numpy/core/_methods.py:189: RuntimeWarning: invalid value encountered in double_scalars
+  ret = ret.dtype.type(ret / rcount)
+2022-02-18 20:04:17,030, INFO: model_score: tensor([], dtype=torch.float64)
+2022-02-18 20:04:17,393, INFO: Early stopping at step 1 due to reaching max kl.
+Warning: trajectory cut off by epoch at 30 steps.

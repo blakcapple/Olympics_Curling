@@ -1,0 +1,15 @@
+device cuda:0
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+Backend TkAgg is interactive backend. Turning interactive mode on.
+2022-02-18 19:53:57,345, INFO: model_score: tensor([], dtype=torch.float64)
+Process SpawnProcess-2:
+Traceback (most recent call last):
+  File "/home/ryd/miniconda3/envs/rl/lib/python3.9/multiprocessing/process.py", line 315, in _bootstrap
+    self.run()
+  File "/home/ryd/miniconda3/envs/rl/lib/python3.9/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/ryd/JIDI_Competition/vec_env/schmem_vec_env.py", line 140, in _subproc_worker
+    last_obs_sequence_dict = _write_obs(env.reset(), None)
+  File "/home/ryd/JIDI_Competition/vec_env/schmem_vec_env.py", line 115, in _write_obs
+    ob_oppo = ob_oppo.reshape(1, *ob_oppo.shape)

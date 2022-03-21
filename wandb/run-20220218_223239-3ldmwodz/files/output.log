@@ -1,0 +1,44 @@
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+device cuda:0
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+Hello from the pygame community. https://www.pygame.org/contribute.html
+2022-02-18 22:32:53,157, INFO: model_score: tensor([], dtype=torch.float64)
+> /home/ryd/JIDI_Competition/rl_trainer/runner.py(188)rollout()
+-> episode +=1
+
+(Pdb) q
+Traceback (most recent call last):
+  File "/home/ryd/JIDI_Competition/rl_trainer/main.py", line 81, in <module>
+    main(args)
+  File "/home/ryd/JIDI_Competition/rl_trainer/main.py", line 70, in main
+    runner.rollout(args.train_epoch)
+  File "/home/ryd/JIDI_Competition/rl_trainer/runner.py", line 188, in rollout
+    episode +=1
+  File "/home/ryd/JIDI_Competition/rl_trainer/runner.py", line 188, in rollout
+    episode +=1
+  File "/home/ryd/miniconda3/envs/rl/lib/python3.9/bdb.py", line 88, in trace_dispatch
+    return self.dispatch_line(frame)
+  File "/home/ryd/miniconda3/envs/rl/lib/python3.9/bdb.py", line 113, in dispatch_line
+    if self.quitting: raise BdbQuit
+bdb.BdbQuit

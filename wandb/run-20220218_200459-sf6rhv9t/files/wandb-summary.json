@@ -1,0 +1,1 @@
+{"stop_pi": 1, "Loss_pi": -96.2662124633789, "Loss_v": 2.4515333052477217e-07, "KL": 0.050501659512519836, "WinR": NaN, "Reward": NaN, "EvalWinR": NaN, "EvalReward": NaN, "_runtime": 38, "_timestamp": 1645185937, "_step": 13, "_wandb": {"runtime": 36}}

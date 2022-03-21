@@ -1,177 +1,130 @@
-import os
-import numpy as np
+from rl_trainer.algo.network import CNNActorCritic
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.distributions import Categorical
-from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
-import sys
-from os import path
-father_path = path.dirname(__file__)
-sys.path.append(str(os.path.dirname(father_path)))
-from rl_trainer.algo.network import Actor, Critic
-from torch.utils.tensorboard import SummaryWriter
-import datetime
-
-
-class Args:
-    clip_param = 0.2
-    max_grad_norm = 0.5
-    ppo_update_time = 10
-    buffer_capacity = 1000
-    batch_size = 32
-    gamma = 0.99
-    lr = 0.0001
-
-    action_space = 36
-    # action_space = 3
-    state_space = 900
-
-
-args = Args()
-device = 'cpu'
-
+from torch.optim import Adam
+import os
+from copy import deepcopy
+import wandb
+import numpy as np 
+import pdb
+from spinup.utils.mpi_pytorch import mpi_avg_grads
+from spinup.utils.mpi_tools import mpi_avg
 
 class PPO:
-    clip_param = args.clip_param
-    max_grad_norm = args.max_grad_norm
-    ppo_update_time = args.ppo_update_time
-    buffer_capacity = args.buffer_capacity
-    batch_size = args.batch_size
-    gamma = args.gamma
-    action_space = args.action_space
-    state_space = args.state_space
-    lr = args.lr
-    use_cnn = False
 
-    def __init__(self, run_dir=None):
-        super(PPO, self).__init__()
-        self.args = args
-        self.actor_net = Actor(self.state_space, self.action_space).to(device)
-        self.critic_net = Critic(self.state_space).to(device)
-        self.buffer = []
-        self.counter = 0
-        self.training_step = 0
+    def __init__(self, state_shape, action_space, pi_lr, v_lr, device, logger, max_size, 
+                batch_size, clip_ratio=0.2, entropy_c=0, train_pi_iters=80, train_v_iters=80, 
+                target_kl=0.01, max_grad_norm=0.5, save_dir='data/models'):
 
-        self.actor_optimizer = optim.Adam(self.actor_net.parameters(), lr=self.lr)
-        self.critic_net_optimizer = optim.Adam(self.critic_net.parameters(), lr=self.lr)
+        self.ac = CNNActorCritic(state_shape, action_space).to(device)
+        self.clip_ratio = clip_ratio
+        self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
+        self.v_optimizer = Adam(self.ac.v.parameters(), lr=v_lr)
+        self.train_pi_iters = train_pi_iters
+        self.train_v_iters = train_v_iters
+        self.target_kl = target_kl
+        self.logger = logger
+        self.check_point_dir = os.path.join(save_dir, 'models')
+        os.makedirs(self.check_point_dir, exist_ok=True)
+        self.max_grad_norm = max_grad_norm
+        self.max_size = max_size
+        self.batch_size = batch_size
+        self.entropy_c = entropy_c
 
-        if run_dir is not None:
-            self.writer = SummaryWriter(os.path.join(run_dir, "PPO training loss at {}".format(
-                datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))))
-        self.IO = True if (run_dir is not None) else False
+    def compute_loss_pi(self, data):
+        
+        data = deepcopy(data)
+        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
+        # Policy loss
+        pi, logp = self.ac.pi(obs, act)
+        ratio = torch.exp(logp - logp_old)
+        clip_adv = torch.clamp(ratio, 1-self.clip_ratio, 1+self.clip_ratio) * adv
+        loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
+        # Useful extra info
+        # approx_kl = (logp_old - logp).mean().item()
+        log_ratio = logp - logp_old
+        approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).item() # this is better(maybe)
+        ent = pi.entropy().mean().item()
+        loss_pi -= self.entropy_c*ent # add entropy loss may be better 
+        clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
+        clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
+        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
 
-    def select_action(self, state, train=True):
-        state = torch.from_numpy(state).float().unsqueeze(0).to(device)
-        with torch.no_grad():
-            action_prob = self.actor_net(state).to(device)
-        c = Categorical(action_prob)
-        if train:
-            action = c.sample()
-        else:
-            action = torch.argmax(action_prob)
-            # action = c.sample()
-        return action.item(), action_prob[:, action.item()].item()
+        return loss_pi, pi_info
 
-    def get_value(self, state):
-        state = torch.from_numpy(state)
-        with torch.no_grad():
-            value = self.critic_net(state)
-        return value.item()
+    def compute_loss_v(self, data):
+        
+        data = deepcopy(data)
+        obs, ret = data['obs'], data['ret']
 
-    def store_transition(self, transition):
-        self.buffer.append(transition)
-        self.counter += 1
+        return ((self.ac.v(obs) - ret)**2).mean()
 
-    def update(self, i_ep):
-        state = torch.tensor(np.array([t.state for t in self.buffer]), dtype=torch.float).to(device)
-        action = torch.tensor(np.array([t.action for t in self.buffer]), dtype=torch.long).view(-1, 1).to(device)
-        reward = [t.reward for t in self.buffer]
-        # update: don't need next_state
-        # reward = torch.tensor([t.reward for t in self.buffer], dtype=torch.float).view(-1, 1)
-        # next_state = torch.tensor([t.next_state for t in self.buffer], dtype=torch.float)
-        old_action_log_prob = torch.tensor([t.a_log_prob for t in self.buffer], dtype=torch.float).view(-1, 1).to(device)
+    def learn(self, data):
 
-        R = 0
-        Gt = []
-        for r in reward[::-1]:
-            R = r + self.gamma * R
-            Gt.insert(0, R)
-        Gt = torch.tensor(Gt, dtype=torch.float).to(device)
-        # print("The agent is updateing....")
-        for i in range(self.ppo_update_time):
-            for index in BatchSampler(SubsetRandomSampler(range(len(self.buffer))), self.batch_size, False):
-                # if self.training_step % 1000 == 0:
-                #     print('I_ep {} ，train {} times'.format(i_ep, self.training_step))
-                # with torch.no_grad():
-                Gt_index = Gt[index].view(-1, 1)
-                V = self.critic_net(state[index].squeeze(1))
-                delta = Gt_index - V
-                advantage = delta.detach()
-                # epoch iteration, PPO core!!!
-                action_prob = self.actor_net(state[index].squeeze(1)).gather(1, action[index])  # new policy
+        pi_l_old, pi_info_old = self.compute_loss_pi(data)
+        pi_l_old = pi_l_old.item()
+        v_l_old = self.compute_loss_v(data).item()
+        # Train policy with multiple steps of gradient descent
+        for i in range(self.train_pi_iters):
+            self.pi_optimizer.zero_grad()
+            loss_pi, pi_info = self.compute_loss_pi(data)
+            kl = mpi_avg(pi_info['kl'])
+            if kl > 1.5 * self.target_kl:
+                self.logger.log('Early stopping at step %d due to reaching max kl.'%i)
+                break
 
-                ratio = (action_prob / old_action_log_prob[index])
-                surr1 = ratio * advantage
-                surr2 = torch.clamp(ratio, 1 - self.clip_param, 1 + self.clip_param) * advantage
+            loss_pi.backward()
+            # torch.nn.utils.clip_grad_norm_(self.ac.pi.parameters(), self.max_grad_norm)
+            mpi_avg_grads(self.ac.pi)    # average grads across MPI processes
+            self.pi_optimizer.step()
 
-                # update actor network
-                action_loss = -torch.min(surr1, surr2).mean()  # MAX->MIN desent
-                # self.writer.add_scalar('loss/action_loss', action_loss, global_step=self.training_step)
-                self.actor_optimizer.zero_grad()
-                action_loss.backward()
-                nn.utils.clip_grad_norm_(self.actor_net.parameters(), self.max_grad_norm)
-                self.actor_optimizer.step()
+        # Value function learning
+        for i in range(self.train_v_iters):
+            self.v_optimizer.zero_grad()
+            loss_v = self.compute_loss_v(data)
+            loss_v.backward()
+            mpi_avg_grads(self.ac.v)    # average grads across MPI processes
+            torch.nn.utils.clip_grad_norm_(self.ac.v.parameters(), self.max_grad_norm)
+            self.v_optimizer.step()
 
-                # update critic network
-                value_loss = F.mse_loss(Gt_index, V)
-                # self.writer.add_scalar('loss/value_loss', value_loss, global_step=self.training_step)
-                self.critic_net_optimizer.zero_grad()
-                value_loss.backward()
-                nn.utils.clip_grad_norm_(self.critic_net.parameters(), self.max_grad_norm)
-                self.critic_net_optimizer.step()
-                self.training_step += 1
+        # Log changes from update
+        kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
+        self.logger.store(LossPi=pi_l_old, LossV=v_l_old,
+                     KL=kl, Entropy=ent, ClipFrac=cf,
+                     DeltaLossPi=(loss_pi.item() - pi_l_old),
+                     DeltaLossV=(loss_v.item() - v_l_old))
 
-                if self.IO:
-                    self.writer.add_scalar('loss/policy loss', action_loss.item(), self.training_step)
-                    self.writer.add_scalar('loss/critic loss', value_loss.item(), self.training_step)
+    def save_models(self, index=None):
+        
+        if index is not None:
+            actor_pth = os.path.join(self.check_point_dir, f'actor_{index}.pth')
+            critic_pth = os.path.join(self.check_point_dir, f'critic_{index}.pth')
+        elif index == None:
+            actor_pth = os.path.join(self.check_point_dir, 'actor.pth')
+            critic_pth = os.path.join(self.check_point_dir, 'critic.pth')
+        self.ac.v.save_model(critic_pth)
+        self.ac.pi.save_model(actor_pth)
 
-        # del self.buffer[:]  # clear experience
-        self.clear_buffer()
+    def load_models(self, load_path, index=None):
 
-    def clear_buffer(self):
-        del self.buffer[:]
+        if index is not None:
+            actor_pth = os.path.join(load_path, f'actor_{index}.pth')
+            critic_pth = os.path.join(load_path, f'critic_{index}.pth')
+        elif index == None:
+            actor_pth = os.path.join(load_path, 'actor.pth')
+            critic_pth = os.path.join(load_path, 'critic.pth')
+        self.ac.v.load_model(critic_pth)
+        self.ac.pi.load_model(actor_pth)
 
-    def save(self, save_path, episode):
-        base_path = os.path.join(save_path, 'trained_model')
-        if not os.path.exists(base_path):
-            os.makedirs(base_path)
+    def select_action(self, obs, phase='train'):
 
-        model_actor_path = os.path.join(base_path, "actor_" + str(episode) + ".pth")
-        torch.save(self.actor_net.state_dict(), model_actor_path)
-        model_critic_path = os.path.join(base_path, "critic_" + str(episode) + ".pth")
-        torch.save(self.critic_net.state_dict(), model_critic_path)
+        a = self.ac.act(obs, phase)
+        
+        return a 
 
-    def load(self, run_dir, episode):
-        print(f'\nBegin to load model: ')
-        print("run_dir: ", run_dir)
-        base_path = os.path.dirname(os.path.dirname(__file__))
-        print("base_path: ", base_path)
-        algo_path = os.path.join(base_path, 'models/ppo')
-        run_path = os.path.join(algo_path, run_dir)
-        run_path = os.path.join(run_path, 'trained_model')
-        model_actor_path = os.path.join(run_path, "actor_" + str(episode) + ".pth")
-        model_critic_path = os.path.join(run_path, "critic_" + str(episode) + ".pth")
-        print(f'Actor path: {model_actor_path}')
-        print(f'Critic path: {model_critic_path}')
+    def step(self, obs):
 
-        if os.path.exists(model_critic_path) and os.path.exists(model_actor_path):
-            actor = torch.load(model_actor_path, map_location=device)
-            critic = torch.load(model_critic_path, map_location=device)
-            self.actor_net.load_state_dict(actor)
-            self.critic_net.load_state_dict(critic)
-            print("Model loaded!")
-        else:
-            sys.exit(f'Model not founded!')
+        a, v, logp = self.ac.step(obs)
+
+        return a, v, logp 
+
 

@@ -1,0 +1,56 @@
+device cuda:0
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+2022-02-18 22:27:05,910, INFO: model_score: tensor([], dtype=torch.float64)
+> /home/ryd/JIDI_Competition/rl_trainer/runner.py(188)rollout()
+-> episode +=1
+
+(Pdb) s
+> /home/ryd/JIDI_Competition/rl_trainer/runner.py(189)rollout()
+-> win_is = 1 if r[index][0] > r[index][1] else 0
+(Pdb) s
+> /home/ryd/JIDI_Competition/rl_trainer/runner.py(190)rollout()
+-> win_is_op = 1 if r[index][0] < r[index][1] else 0
+
+
+(Pdb) ep_lens
+array([2091.])
+
+(Pdb) c
+2022-02-18 22:28:41,491, INFO: Early stopping at step 0 due to reaching max kl.
+2022-02-18 22:28:42,148, INFO: epoch:0, WinR:0.0, Reward:, 13.0, time:96.23828864097595
+Warning: trajectory cut off by epoch at 909 steps.
+> /home/ryd/JIDI_Competition/rl_trainer/runner.py(187)rollout()
+-> pdb.set_trace()
+
+
+(Pdb) ep_lens
+array([3025.])
+
+(Pdb) c
+2022-02-18 22:30:01,954, INFO: Early stopping at step 0 due to reaching max kl.
+2022-02-18 22:30:02,607, INFO: epoch:1, WinR:1.0, Reward:, 116.0, time:176.69690799713135
+Warning: trajectory cut off by epoch at 884 steps.
+> /home/ryd/JIDI_Competition/rl_trainer/runner.py(188)rollout()
+-> episode +=1
+
+(Pdb) ep_lens
+array([3250.])
+(Pdb) t
+2365
+
+(Pdb) q
+Traceback (most recent call last):
+  File "/home/ryd/JIDI_Competition/rl_trainer/main.py", line 81, in <module>
+    main(args)
+  File "/home/ryd/JIDI_Competition/rl_trainer/main.py", line 70, in main
+    runner.rollout(args.train_epoch)
+  File "/home/ryd/JIDI_Competition/rl_trainer/runner.py", line 188, in rollout
+    episode +=1
+  File "/home/ryd/JIDI_Competition/rl_trainer/runner.py", line 188, in rollout
+    episode +=1
+  File "/home/ryd/miniconda3/envs/rl/lib/python3.9/bdb.py", line 88, in trace_dispatch
+    return self.dispatch_line(frame)
+  File "/home/ryd/miniconda3/envs/rl/lib/python3.9/bdb.py", line 113, in dispatch_line
+    if self.quitting: raise BdbQuit
+bdb.BdbQuit

@@ -1,0 +1,35 @@
+device cuda:0
+pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+2022-02-18 22:19:52,590, INFO: model_score: tensor([], dtype=torch.float64)
+> /home/ryd/JIDI_Competition/rl_trainer/runner.py(188)rollout()
+-> episode +=1
+
+(Pdb) done
+True
+
+(Pdb) c
+Warning: trajectory cut off by epoch at 909 steps.
+2022-02-18 22:22:39,324, INFO: model_score: tensor([], dtype=torch.float64)
+2022-02-18 22:22:39,439, INFO: Early stopping at step 0 due to reaching max kl.
+2022-02-18 22:22:40,090, INFO: epoch:0, WinR:0.0, Reward:, 13.0, time:167.499653339386
+> /home/ryd/JIDI_Competition/rl_trainer/runner.py(187)rollout()
+-> pdb.set_trace()
+
+(Pdb) ep_lens
+array([3025.])
+
+
+(Pdb) ep_rets
+array([116.])
+
+(Pdb) c
+Warning: trajectory cut off by epoch at 884 steps.
+Traceback (most recent call last):
+  File "/home/ryd/JIDI_Competition/rl_trainer/main.py", line 81, in <module>
+    main(args)
+  File "/home/ryd/JIDI_Competition/rl_trainer/main.py", line 70, in main
+    runner.rollout(args.train_epoch)
+  File "/home/ryd/JIDI_Competition/rl_trainer/runner.py", line 187, in rollout
+    pdb.set_trace()
+UnboundLocalError: local variable 'opponent_number' referenced before assignment
