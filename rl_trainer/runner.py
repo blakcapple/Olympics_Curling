@@ -66,27 +66,25 @@ class Runner:
         actions_map = {i:actions[i] for i in range(action_num)}
         return actions_map
     
-    def _wrapped_action(self, actions, who_is_throwing):
-        # 根据当前回合是谁在投掷冰球来设计动作；无意义的一方的动作为零向量
-        wrapped_actions = []
-        for action in actions:
-            if isinstance(self.action_space, Discrete):
-                real_action = self.actions_map[action]
-            elif isinstance(self.action_space, Box):
-                action = np.clip(action, -1, 1)
-                high = self.action_space.high
-                low = self.action_space.low
-                real_action = low + 0.5*(action + 1.0)*(high - low)
-            wrapped_action = [[real_action[0]], [real_action[1]]]
-            wrapped_opponent_action = [[0], [0]]
-            if who_is_throwing == 0:
-                wrapped_actions.append([wrapped_action, wrapped_opponent_action])
-            else:
-                wrapped_actions.append([wrapped_opponent_action, wrapped_action])
+    def _wrapped_action(self, action, opponent_action):
 
-        return wrapped_actions
+        if isinstance(self.action_space, Discrete):
+            real_action = self.actions_map[action]
+            real_opponent_action = self.actions_map[opponent_action]
+        elif isinstance(self.action_space, Box):
+            action = np.clip(action, -1, 1)
+            opponent_action = np.clip(opponent_action, -1, 1)
+            high = self.action_space.high
+            low = self.action_space.low
+            real_action = low + 0.5*(action + 1.0)*(high - low)
+            real_opponent_action = low + 0.5*(opponent_action + 1.0)*(high - low)
+        wrapped_action = [[real_action[0]], [real_action[1]]]
+        wrapped_opponent_action = [[real_opponent_action[0]], [real_opponent_action[1]]]
+        wrapped_action= [wrapped_action, wrapped_opponent_action]
 
-    def obs_transform(self, obs, obs_sequence_dict):
+        return wrapped_action
+
+    def obs_transform(self, obs, agent_index, obs_sequence_dict):
     
         ob_ctrl = obs[0]['obs'][0]
         ob_oppo = obs[1]['obs'][0]
@@ -96,7 +94,40 @@ class Runner:
 
         release_ctrl = obs[0]['release']
         release_oppo = obs[1]['release']
-        
+
+        info = np.zeros(14) # record game infomation
+
+        if obs[0]['game round'] == 0:
+            info[0] = 1
+        else:
+            info[1] = 1
+
+        if obs[0]['throws left'][agent_index] == 3:
+            info[2] = 1
+        elif obs[0]['throws left'][agent_index] == 2:
+            info[3] = 1
+        elif obs[0]['throws left'][agent_index] == 1:
+            info[4] = 1
+        elif obs[0]['throws left'][agent_index] == 0:
+            info[5] = 1
+
+        if obs[0]['throws left'][1-agent_index] == 3:
+            info[6] = 1
+        elif obs[0]['throws left'][1-agent_index] == 2:
+            info[7] = 1
+        elif obs[0]['throws left'][1-agent_index] == 1:
+            info[8] = 1
+        elif obs[0]['throws left'][1-agent_index] == 0:
+            info[9] = 1
+        if agent_index == 0:
+            info[10:12] = np.array(obs[0]['score']) / 4
+        else:
+            info[10:12] = np.array(obs[0]['score'].reverse) / 4
+        if agent_index == 0:
+            info[12] = 1
+        else:
+            info[13] = 1
+
         if obs_sequence_dict is not None:
             obs_sequence1 = np.concatenate((np.delete(obs_sequence_dict['obs'][0], 0, axis=0), ob_ctrl), axis=0)
             obs_sequence2 = np.concatenate((np.delete(obs_sequence_dict['obs'][1], 0, axis=0), ob_oppo), axis=0)
@@ -105,12 +136,12 @@ class Runner:
             obs_sequence2 = np.repeat(ob_oppo, 4, axis=0)
         obs_all = np.append(obs_sequence1[np.newaxis], obs_sequence2[np.newaxis], axis=0)
         release_all = np.array([release_ctrl, release_oppo])
-        dict = {'obs':obs_all, 'release':release_all}
-
+        dict = {'obs':obs_all, 'release':release_all, "info":info}
         return dict 
 
     def rollout(self, epochs):
-
+        
+        agent_index = 0
         ep_len = 0
         ep_ret = 0
         start_time = time.time()
@@ -118,7 +149,7 @@ class Runner:
         epoch_reward = []
         raw_o = self.env.reset()
         action_end = False
-        o = self.obs_transform(raw_o, None)
+        o = self.obs_transform(raw_o, agent_index, None)
     # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
             t = 0
@@ -130,66 +161,69 @@ class Runner:
                     who_is_throwing = 1
                 else:
                     who_is_throwing = 0
-
-                obs = o['obs'][who_is_throwing]
-                release = o['release'][who_is_throwing]
-                action_end = True if release else False # 冰球投掷出去后，不受动作控制
+                info = o['info']
+                obs = o['obs'][agent_index]
+                release = o['release'][agent_index]
+                action_end = True if release or who_is_throwing != agent_index else False
                 # 在没有过释放冰球前正常采取动作，释放冰球后，所有动作将无效
                 if not action_end:
-                    a, v, logp = self.policy.step(torch.as_tensor(obs[newaxis], dtype=torch.float32, device=self.device))
-                env_a = self._wrapped_action(a, who_is_throwing)
-                raw_next_o, r, d, info_before, info_after = self.env.step(env_a[0])
-                next_o = self.obs_transform(raw_next_o, o)
+                    a, v, logp = self.policy.step(torch.as_tensor(obs[newaxis], dtype=torch.float32, device=self.device),
+                                                  torch.as_tensor(info[newaxis], dtype=torch.float32, device=self.device))
+                opponent_a = self.opponent.act(o['obs'][1-agent_index])
+                env_a = self._wrapped_action(a[0], opponent_a)
+                raw_next_o, r, d, info_before, info_after = self.env.step(env_a)
+                next_o = self.obs_transform(raw_next_o, agent_index, o)
                 # 更新release状态
-                next_release = next_o['release'][who_is_throwing] 
+                next_release = next_o['release'][agent_index] 
                 next_action_end = True if next_release else False
                 # 记忆临界状态
                 if next_action_end and not stored_temp:
-                    temp_experience = [obs, a, r, v, logp]
+                    temp_experience = [obs, info, a, r[agent_index], v, logp]
                     stored_temp = True 
-                if r !=0 :
+                if any(r) !=0 :
                     false_d = True
                     stored_temp = False  # False 
                 else: false_d = False
-                ep_ret += r
+                ep_ret += r[agent_index]
                 ep_len += 1 
 
                 # save and log
                 # 只存储非临界状态前的经验数组
-                if not stored_temp:
+                if not stored_temp and who_is_throwing == agent_index:
                     # 冰球得到延迟奖励后，更新临界时的经验数组，并存储到buffer中
                     if action_end:
-                        temp_experience[2] = r
+                        temp_experience[3] = r[agent_index]
                         self.buffer.store(*(temp_experience))
-                        self.logger.store(VVals=temp_experience[3])
+                        self.logger.store(VVals=temp_experience[4])
                         t += 1
                     else:
-                        self.buffer.store(obs, a, r, v, logp)
+                        self.buffer.store(obs, info, a, r[agent_index], v, logp)
                         self.logger.store(VVals=v)
                         t += 1
 
                 o = next_o
                 epoch_ended = t==(self.local_steps_per_epoch)
-                if false_d or epoch_ended:
-                    if epoch_ended and not(false_d):
+                if d or epoch_ended:
+                    if epoch_ended and not(d):
                         print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, flush=True)
                     # if trajectory didn't reach terminal state, bootstrap value target
                     if epoch_ended:
-                        _, v, _ = self.policy.step(torch.as_tensor(o['obs'][who_is_throwing][newaxis], dtype=torch.float32, device=self.device))
+                        _, v, _ = self.policy.step(torch.as_tensor(o['obs'][agent_index][newaxis], dtype=torch.float32, device=self.device),
+                                                   torch.as_tensor(o['info'][newaxis], dtype=torch.float32, device=self.device) )
                     else:
                         v = 0
                     self.buffer.finish_path(v)
-                    if false_d:
+                    if d:
                         episode +=1
                         epoch_reward.append(ep_ret)
                         self.logger.store(EpRet=ep_ret, EpLen=ep_len)
                         # 每一轮投掷结束之后，obs序列重置
-                        o = self.obs_transform(raw_next_o, None)
                     ep_ret, ep_len =  0, 0
+                if false_d:
+                    o = self.obs_transform(raw_next_o, agent_index, None)
                 if d:
                     o = self.env.reset()
-                    o = self.obs_transform(o, None)
-
+                    o = self.obs_transform(o, agent_index, None)
             data = self.buffer.get()
             # update policy
             self.policy.learn(data)

@@ -173,7 +173,7 @@ class RLAgent:
             num = action_space.n
             #dicretise action space
             forces = np.linspace(-100, 200, num=int(np.sqrt(num)), endpoint=True)
-            thetas = np.linspace(-30, 30, num=int(np.sqrt(num)), endpoint=True)
+            thetas = np.linspace(-10, 10, num=int(np.sqrt(num)), endpoint=True)
             actions = [[force, theta] for force in forces for theta in thetas]
             actions_map = {i:actions[i] for i in range(num)}
             self.actions_map = actions_map
@@ -214,7 +214,7 @@ state_shape = [4, 30, 30]
 action_num = 49
 continue_space = Box(low=np.array([-100, -10]), high=np.array([200, 10]))   
 discrete_space = Discrete(action_num)
-load_pth = os.path.dirname(os.path.abspath(__file__)) + "/actor_400.pth"
+load_pth = os.path.dirname(os.path.abspath(__file__)) + "/actor_300.pth"
 agent = RLAgent(state_shape, discrete_space)
 agent.load_model(load_pth)
 # agent.save_model(load_pth)

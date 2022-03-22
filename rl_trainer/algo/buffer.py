@@ -10,9 +10,10 @@ class PPOBuffer:
     for calculating the advantages of state-action pairs.
     """
 
-    def __init__(self, obs_dim, act_dim, size, device, gamma=0.99, lam=0.95):
+    def __init__(self, obs_dim, act_dim, info_dim, size, device, gamma=0.99, lam=0.95):
         self.obs_buf = np.zeros(combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(combined_shape(size, act_dim), dtype=np.float32)
+        self.info_buf = np.zeros(combined_shape(size, info_dim), dtype=np.float32)
         self.adv_buf = np.zeros(size, dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
         self.ret_buf = np.zeros(size, dtype=np.float32)
@@ -22,7 +23,7 @@ class PPOBuffer:
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
         self.device = device
 
-    def store(self, obs, act, rew, val, logp):
+    def store(self, obs, info, act, rew, val, logp):
         """
         Append one timestep of agent-environment interaction to the buffer.
         """
@@ -32,6 +33,7 @@ class PPOBuffer:
         self.rew_buf[self.ptr] = rew
         self.val_buf[self.ptr] = val
         self.logp_buf[self.ptr] = logp
+        self.info_buf[self.ptr] = info
         self.ptr += 1
 
     def finish_path(self, last_val=0):
@@ -74,5 +76,5 @@ class PPOBuffer:
         adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
-                    adv=self.adv_buf, logp=self.logp_buf)
+                    adv=self.adv_buf, logp=self.logp_buf, info=self.info_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32, device=self.device) for k,v in data.items()}

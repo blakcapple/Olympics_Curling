@@ -66,7 +66,6 @@ def run_game(env, algo_list, episode, verbose=False):
         state = env.reset()
         if RENDER:
             env.env_core.render()
-            pdb.set_trace()
         step = 0
 
         while True:

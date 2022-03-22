@@ -361,7 +361,7 @@ class curling(OlympicsBase):
                 self.game_round += 1
                 next_obs = self.reset(reset_game=True)
 
-                return next_obs, reward, False, 'game1 ends, switch position'
+                return next_obs, step_reward, False, 'game1 ends, switch position'
             else:
                 raise NotImplementedError
 
@@ -377,7 +377,7 @@ class curling(OlympicsBase):
             self.gamma = h_gamma
 
         #return self.agent_pos, self.agent_v, self.agent_accel, self.agent_theta, obs_next, step_reward, done
-        return obs_next, reward, done, ''
+        return obs_next, step_reward, done, ''
 
     # def get_obs_encode(self):
     #     obs = self.get_obs()

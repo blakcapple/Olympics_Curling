@@ -15,16 +15,13 @@ class random_agent:
         random.seed(seed)
 
     def act(self, obs):
-        actions = []
         if isinstance(self.action_space, Discrete):
-            for _ in range(obs.shape[0]):
-                a = random.randint(0, self.action_space.n-1)
-                actions.append(a)
+            a = random.randint(0, self.action_space.n-1)
+
         if isinstance(self.action_space, Box):
-            for _ in range(obs.shape[0]):
-                a =  np.random.uniform([-1, -1], [1, 1])
-                actions.append(a)
-        return actions
+            a =  np.random.uniform([-1, -1], [1, 1])
+        
+        return a
 
 class rl_agent:
     

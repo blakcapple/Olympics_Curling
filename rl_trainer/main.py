@@ -52,7 +52,7 @@ def main(args):
 
     device = 'cpu' # spinning up mpi tools only support cpu 
     print('device', device)
-    
+
     local_epoch_step = int(args.epoch_step / args.cpu)
     policy = PPO(state_shape, action_space, pi_lr=args.pi_lr, v_lr=args.v_lr, device=device, 
                 entropy_c = args.entropy_c,logger=logger, clip_ratio=args.clip_ratio, 
@@ -66,8 +66,8 @@ def main(args):
     var_counts = tuple(count_vars(module) for module in [policy.ac.pi, policy.ac.v])
     logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
 
-    
-    buffer = PPOBuffer(state_shape, act_dim, local_epoch_step, device, args.gamma, args.lamda)
+    info_dim = 14
+    buffer = PPOBuffer(state_shape, act_dim, info_dim, local_epoch_step, device, args.gamma, args.lamda)
     if args.load:
         policy.load_models(args.load_dir, args.load_index)
         if args.load_opponent_index > 0:
