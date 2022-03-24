@@ -32,9 +32,9 @@ class rl_agent:
         elif isinstance(action_space, Discrete):
             self.actor = CNNCategoricalActor(state_shape, action_space.n, nn.ReLU).to(device)
 
-    def act(self, obs):
+    def act(self, obs, info):
 
-        pi, _ = self.actor(obs)
+        pi, _ = self.actor(obs, info)
         a_raw = pi.sample()
         
         return a_raw.detach().cpu().numpy()

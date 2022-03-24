@@ -1,4 +1,4 @@
-
+from numpy import newaxis
 import torch.nn as nn
 import torch 
 import os
@@ -118,44 +118,87 @@ class CNNGaussianActor(nn.Module):
         return mu.detach().cpu().numpy()
 
 class CNNCategoricalActor(nn.Module):
-
+    
     def __init__(self, input_shape, act_dim, activation):
         super().__init__()
         self.input_shape = input_shape
         self.act_dim = act_dim 
         self.cnn_layer = CNNLayer(input_shape)
-        self.linear_layer = mlp([256]+[256]+[act_dim], activation)
-        self.logits_net = nn.Sequential(self.cnn_layer, self.linear_layer)
+        # [game_round:2, throws left:8, score:2, player:2]
+        self.extra_layer = mlp([14]+[64], activation) 
+        self.linear_layer = mlp([256+64]+[256]+[act_dim], activation)
         
-    def distribution(self, obs):
-        logits = self.logits_net(obs)
+    def distribution(self, obs, info):
+        cnn_out = self.cnn_layer(obs)
+        extra_out = self.extra_layer(info)
+        full_out = torch.cat([cnn_out, extra_out], dim=1)
+        logits = self.linear_layer(full_out)
+
         return Categorical(logits=logits)
+
+    def act(self, obs, info):
+        cnn_out = self.cnn_layer(obs)
+        extra_out = self.extra_layer(info)
+        full_out = torch.cat([cnn_out, extra_out], dim=1)
+        logits = self.linear_layer(full_out)
+
+        return logits
 
     def log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act)
 
-    def forward(self, obs, act=None):
+    def forward(self, obs, info, act=None):
         # Produce action distributions for given observations, and 
         # optionally compute the log likelihood of given actions under
         # those distributions.
-        pi = self.distribution(obs)
+        pi = self.distribution(obs, info)
         logp_a = None
         if act is not None:
             logp_a = self.log_prob_from_distribution(pi, act.view(-1))
         return pi, logp_a
 
     def save_model(self, pth):
-        torch.save(self.state_dict(), pth, _use_new_zipfile_serialization=False)
+        torch.save(self.state_dict(), pth)
 
     def load_model(self, pth):
         self.load_state_dict(torch.load(pth))
 
-    def eval(self, obs):
+    def eval(self, obs, info):
         """
         return the best action
         """
-        logits = self.logits_net(obs).view(-1)
+        cnn_out = self.cnn_layer(obs)
+        extra_out = self.extra_layer(info)
+        full_out = torch.cat([cnn_out, extra_out], dim=1)
+        logits = self.linear_layer(full_out)
+
         return torch.argmax(logits).item()
+        
+
+class CNNCritic(nn.Module):
+
+    def __init__(self, input_shape, activation):
+        super().__init__()
+        self.input_shape = input_shape
+        self.cnn_layer = CNNLayer(input_shape)
+        self.extra_layer = mlp([14]+[64], activation) 
+        self.linear_layer = mlp([256+64]+[256]+[1], activation)
+
+    def forward(self, obs, info):
+        
+        cnn_out = self.cnn_layer(obs)
+        extra_out = self.extra_layer(info)
+        full_out = torch.cat([cnn_out, extra_out], dim=1)
+        v = self.linear_layer(full_out)
+
+        return torch.squeeze(v, -1)
+
+    def save_model(self, pth):
+        torch.save(self.state_dict(), pth)
+
+    def load_model(self, pth):
+        self.load_state_dict(torch.load(pth))
+
 ####
 class RLAgent:
 
@@ -168,8 +211,6 @@ class RLAgent:
         elif isinstance(action_space, Discrete):
             self.is_act_continuous = False
             self.actor = CNNCategoricalActor(state_shape, action_space.n, nn.ReLU)
-            if action_space.n == 36:
-                self.actor = CNNCategoricalActor(state_shape, 35, nn.ReLU)
             num = action_space.n
             #dicretise action space
             forces = np.linspace(-100, 200, num=int(np.sqrt(num)), endpoint=True)
@@ -179,8 +220,9 @@ class RLAgent:
             self.actions_map = actions_map
         self.obs_sequence = None
 
-    def choose_action(self, obs, deterministic=False):
+    def choose_action(self, obs, info, deterministic=False):
         state = torch.from_numpy(obs).float() # [1, 25, 25]
+        info = torch.from_numpy(info[newaxis]).float()
         if self.obs_sequence is not None:
             self.obs_sequence = torch.cat((self.obs_sequence[1:, :, :], state), dim=0) #[4, 25, 25]
         else:
@@ -190,14 +232,14 @@ class RLAgent:
             if deterministic:
                 a_raw = self.actor.mu_net(obs_sequence)
             else:
-                pi, _ = self.actor(obs_sequence)
+                pi, _ = self.actor(obs_sequence, info)
                 a_raw = pi.sample()
         else:
             if deterministic:
-                logits = self.actor.logits_net(obs_sequence)
+                logits = self.actor.act(obs_sequence, info)
                 a_raw = torch.argmax(logits)
             else:
-                pi, _ = self.actor(obs_sequence)
+                pi, _ = self.actor(obs_sequence, info)
                 a_raw = pi.sample()
 
         return a_raw
@@ -212,18 +254,57 @@ class RLAgent:
 
 state_shape = [4, 30, 30]
 action_num = 49
-continue_space = Box(low=np.array([-100, -10]), high=np.array([200, 10]))   
+continue_space = Box(low=np.array([-100, -30]), high=np.array([200, 30]))   
 discrete_space = Discrete(action_num)
-load_pth = os.path.dirname(os.path.abspath(__file__)) + "/actor_300.pth"
+load_pth = os.path.dirname(os.path.abspath(__file__)) + "/actor_1000.pth"
 agent = RLAgent(state_shape, discrete_space)
 agent.load_model(load_pth)
-# agent.save_model(load_pth)
+
+
+def get_info(obs, agent_index):
+    
+        info = np.zeros(14) # record game infomation
+
+        if obs['game round'] == 0:
+            info[0] = 1
+        else:
+            info[1] = 1
+
+        if obs['throws left'][agent_index] == 3:
+            info[2] = 1
+        elif obs['throws left'][agent_index] == 2:
+            info[3] = 1
+        elif obs['throws left'][agent_index] == 1:
+            info[4] = 1
+        elif obs['throws left'][agent_index] == 0:
+            info[5] = 1
+
+        if obs['throws left'][1-agent_index] == 3:
+            info[6] = 1
+        elif obs['throws left'][1-agent_index] == 2:
+            info[7] = 1
+        elif obs['throws left'][1-agent_index] == 1:
+            info[8] = 1
+        elif obs['throws left'][1-agent_index] == 0:
+            info[9] = 1
+        if agent_index == 0:
+            info[10:12] = np.array(obs['score']) / 4
+        else:
+            info[10:12] = np.array(list(reversed(obs['score']))) / 4
+        if agent_index == 0:
+            info[12] = 1
+        else:
+            info[13] = 1
+
+        return info 
 
 
 def my_controller(observation_list, action_space_list, is_act_continuous):
     obs = observation_list['obs'].copy()
+    agent_index = observation_list['controlled_player_index']
     obs = np.array(obs)
-    actions_raw = agent.choose_action(obs, True)
+    info = get_info(observation_list, agent_index)
+    actions_raw = agent.choose_action(obs, info, True)
     if agent.is_act_continuous:
         actions_raw = actions_raw.detach().cpu().numpy().reshape(-1)
         action = np.clip(actions_raw, -1, 1)
