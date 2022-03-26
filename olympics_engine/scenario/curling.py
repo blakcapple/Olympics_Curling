@@ -288,11 +288,11 @@ class curling(OlympicsBase):
 
 
         done = self.is_terminal()
-
+        info = '' # 记录比赛信息
         if not done:
             round_end, end_info = self._round_terminal()
             if round_end:
-
+                info = 'round_end'
                 if end_info is not None:
                     #clean the last agent
                     del self.agent_list[-1]
@@ -312,9 +312,9 @@ class curling(OlympicsBase):
                 if self.temp_winner == -1:
                     step_reward=[0., 0.]
                 elif self.temp_winner == 0:
-                    step_reward=[1, 0.]
+                    step_reward=[10, 0.]
                 elif self.temp_winner == 1:
-                    step_reward=[0., 1]
+                    step_reward=[0., 10]
                 else:
                     raise NotImplementedError
 
@@ -335,6 +335,7 @@ class curling(OlympicsBase):
             if self.game_round == 1:
                 # self.final_winner, min_d = self.current_winner()
                 # self.temp_winner = self.final_winner
+                info = 'game2_end'
                 self._clear_agent()
                 self.cal_game_point()
 
@@ -353,15 +354,15 @@ class curling(OlympicsBase):
                 self.view_terminal = True
 
             elif self.game_round == 0:
-                pdb.set_trace()
+                info = 'game1_end'
                 self._clear_agent()
                 game1_winner, mid_d = self.current_winner()
-                step_reward = [10., 0] if game1_winner == 0 else [0., 10.]
+                step_reward = [20., 0] if game1_winner == 0 else [0., 20.]
                 self.cal_game_point()
                 self.game_round += 1
                 next_obs = self.reset(reset_game=True)
 
-                return next_obs, step_reward, False, 'game1 ends, switch position'
+                return next_obs, step_reward, False, info
             else:
                 raise NotImplementedError
 
@@ -377,7 +378,7 @@ class curling(OlympicsBase):
             self.gamma = h_gamma
 
         #return self.agent_pos, self.agent_v, self.agent_accel, self.agent_theta, obs_next, step_reward, done
-        return obs_next, step_reward, done, ''
+        return obs_next, step_reward, done, info
 
     # def get_obs_encode(self):
     #     obs = self.get_obs()

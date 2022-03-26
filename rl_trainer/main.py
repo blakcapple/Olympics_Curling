@@ -22,6 +22,8 @@ from spinup.utils.logx import EpochLogger
 from spinup.utils.run_utils import setup_logger_kwargs
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params
 from spinup.utils.mpi_tools import mpi_fork, proc_id, num_procs
+from rl_trainer.algo.icm import ICMRewardModel
+from easydict import EasyDict
 
 
 def count_vars(module):
@@ -79,8 +81,30 @@ def main(args):
     else:
         opponent = random_agent(action_space)
 
-    runner = Runner(args, env, policy, opponent, buffer, logger, device, action_space, act_dim)
-
+    config = dict(
+        # (str) the type of the exploration method
+        type='icm',
+        # (str) the intrinsic reward type, including add, new, or assign
+        intrinsic_reward_type='new',
+        # (float) learning rate of the optimizer
+        learning_rate=1e-3,
+        # (Tuple[int, list]), the observation shape,
+        obs_shape=[1,30,30],
+        # (int) the action shape, support discrete action only in this version
+        action_shape=49,
+        # (float) batch size
+        batch_size=10,
+        # (list) the MLP layer shape
+        hidden_size_list=[32, 64, 64, 256],
+        # (int) update how many times after each collect
+        update_per_collect=50,
+        # (float) the importance weight of the forward and reverse loss
+        reverse_scale=1,
+    )
+    config = EasyDict(config)
+    icm_agent = ICMRewardModel(config, 'cpu', args.save_dir, logger)
+    sync_params(icm_agent.reward_model)
+    runner = Runner(args, env, policy, icm_agent, opponent, buffer, logger, device, action_space, act_dim)
     runner.rollout(args.train_epoch)
 
 if __name__ == '__main__':

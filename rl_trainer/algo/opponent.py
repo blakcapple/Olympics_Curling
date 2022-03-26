@@ -14,7 +14,7 @@ class random_agent:
     def seed(self, seed = None):
         random.seed(seed)
 
-    def act(self, obs):
+    def act(self, obs, info):
         if isinstance(self.action_space, Discrete):
             a = random.randint(0, self.action_space.n-1)
 

@@ -8,17 +8,22 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-
+from spinup.utils.mpi_pytorch import mpi_avg_grads
+from spinup.utils.mpi_tools import mpi_statistics_scalar
 from ding.utils import SequenceType, REWARD_MODEL_REGISTRY
 from ding.model import FCEncoder, ConvEncoder
 from ding.torch_utils import one_hot
-
+import pdb
+from rl_trainer.algo.cnn import CNNLayer
+import os
+from copy import deepcopy
 
 def collect_states(iterator: list) -> Tuple[list, list, list]:
     states = []
     next_states = []
     actions = []
-    for item in iterator:
+    items = deepcopy(iterator)
+    for item in items:
         state = item['obs']
         next_state = item['next_obs']
         action = item['action']
@@ -49,7 +54,7 @@ class ICMNetwork(nn.Module):
         if isinstance(obs_shape, int) or len(obs_shape) == 1:
             self.feature = FCEncoder(obs_shape, hidden_size_list)
         elif len(obs_shape) == 3:
-            self.feature = ConvEncoder(obs_shape, hidden_size_list)
+            self.feature = CNNLayer(obs_shape)
         else:
             raise KeyError(
                 "not support obs_shape for pre-defined encoder: {}, please customize your own ICM model".
@@ -101,6 +106,7 @@ class ICMNetwork(nn.Module):
             - pred_action_logit (:obj:`torch.Tensor`): :math:`(B, A)`, where B is the batch size
               and A is the ''action_shape''
         """
+
         action = one_hot(action_long, num=self.action_shape)
         encode_state = self.feature(state)
         encode_next_state = self.feature(next_state)
@@ -122,6 +128,14 @@ class ICMNetwork(nn.Module):
         pred_next_state_feature = self.forward_net_2(torch.cat((pred_next_state_feature_orig, action), 1))
         real_next_state_feature = encode_next_state
         return real_next_state_feature, pred_next_state_feature, pred_action_logit
+
+    def save_model(self, pth):
+
+        torch.save(self.state_dict(), pth)
+
+    def load_model(self, pth):
+
+        self.load_state_dict(torch.load(pth))
 
 class ICMRewardModel():
     """
@@ -152,7 +166,7 @@ class ICMRewardModel():
         reverse_scale=1,
     )
 
-    def __init__(self, config: EasyDict, device: str, ) -> None:  # noqa
+    def __init__(self, config: EasyDict, device: str, save_dir, logger) -> None:  # noqa
         self.cfg = config
         assert device == "cpu" or device.startswith("cuda")
         self.device = device
@@ -168,8 +182,11 @@ class ICMRewardModel():
         self.ce = nn.CrossEntropyLoss(reduction="mean")
         self.forward_mse = nn.MSELoss(reduction='none')
         self.reverse_scale = config.reverse_scale
+        self.logger = logger
+        self.check_point_dir = os.path.join(save_dir, 'models')
 
     def _train(self) -> None:
+
         train_data_list = [i for i in range(0, len(self.train_states))]
         train_data_index = random.sample(train_data_list, self.cfg.batch_size)
         data_states: list = [self.train_states[i] for i in train_data_index]
@@ -178,7 +195,6 @@ class ICMRewardModel():
         data_next_states: torch.Tensor = torch.stack(data_next_states).to(self.device)
         data_actions: list = [self.train_actions[i] for i in train_data_index]
         data_actions: torch.Tensor = torch.cat(data_actions).to(self.device)
-
         real_next_state_feature, pred_next_state_feature, pred_action_logit = self.reward_model(
             data_states, data_next_states, data_actions
         )
@@ -187,15 +203,20 @@ class ICMRewardModel():
         loss = self.reverse_scale * inverse_loss + forward_loss
         self.opt.zero_grad()
         loss.backward()
+        mpi_avg_grads(self.reward_model)
         self.opt.step()
+        
+        return inverse_loss, forward_loss
+        
 
     def train(self) -> None:
         for _ in range(self.cfg.update_per_collect):
-            self._train()
+            inverse_loss, forward_loss = self._train()
+        self.logger.store(IcmInverseLoss=inverse_loss)
+        self.logger.store(IcmForwardLoss=forward_loss)
         self.clear_data()
 
     def estimate(self, data: list) -> None:
-
         states, next_states, actions = collect_states(data)
         states = torch.stack(states).to(self.device)
         next_states = torch.stack(next_states).to(self.device)
@@ -204,7 +225,7 @@ class ICMRewardModel():
             real_next_state_feature, pred_next_state_feature, _ = self.reward_model(states, next_states, actions)
             reward = self.forward_mse(real_next_state_feature, pred_next_state_feature).mean(dim=1)
             reward = (reward - reward.min()) / (reward.max() - reward.min() + 1e-8)
-            reward = reward.to(data[0]['reward'].device)
+            # reward = reward.to(data[0]['reward'].device)
             reward = torch.chunk(reward, reward.shape[0], dim=0)
         for item, rew in zip(data, reward):
             if self.intrinsic_reward_type == 'add':
@@ -226,3 +247,17 @@ class ICMRewardModel():
         self.train_states.clear()
         self.train_next_states.clear()
         self.train_actions.clear()
+
+    def save_models(self, index):
+        if index is not None:
+            icm_pth = os.path.join(self.check_point_dir, f'icm_{index}.pth')
+        elif index == None:
+            icm_pth = os.path.join(self.check_point_dir, 'icm.pth')
+        self.reward_model.save_model(icm_pth)
+
+    def load_models(self, load_path, index):
+        if index is not None:
+            icm_pth = os.path.join(load_path, f'icm_{index}.pth')
+        elif index == None:
+            icm_pth = os.path.join(load_path, 'icm.pth')
+        self.reward_model.save_model(icm_pth)

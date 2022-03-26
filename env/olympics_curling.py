@@ -78,7 +78,7 @@ class OlympicsCurling(Game):
         info_before = self.step_before_info()
         joint_action_decode = self.decode(joint_action)
         all_observations, reward, done, info_after = self.env_core.step(joint_action_decode)
-        info_after = ''
+        # info_after = ''
         self.current_state = all_observations
 
         self.current_game_round = self.env_core.game_round

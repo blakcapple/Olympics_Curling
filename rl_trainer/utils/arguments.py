@@ -22,7 +22,7 @@ def read_args():
     parser.add_argument('--mini_batch', default=3, type=int)
     parser.add_argument('--entropy_c', default=0.0, type=float)
     parser.add_argument('--train_pi_iters', default=10, type=int)
-    parser.add_argument('--train_v_iters', default=30, type=int)
+    parser.add_argument('--train_v_iters', default=20, type=int)
     parser.add_argument('--lamda', default=0.97, type=float)
     parser.add_argument('--gamma', default=0.99, type=float)
     parser.add_argument('--target_kl', default=0.01, type=float)

@@ -36,7 +36,7 @@ class PPOBuffer:
         self.info_buf[self.ptr] = info
         self.ptr += 1
 
-    def finish_path(self, last_val=0):
+    def finish_path(self, last_val=0, intrinsic_reward=None):
         """
         Call this at the end of a trajectory, or when one gets cut off
         by an epoch ending. This looks back in the buffer to where the
@@ -50,8 +50,13 @@ class PPOBuffer:
         This allows us to bootstrap the reward-to-go calculation to account
         for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
         """
-
         path_slice = slice(self.path_start_idx, self.ptr)
+        if intrinsic_reward is not None:
+            # this special cases may happens when agent cross the line and epoch end; just clip the last reward
+            if len(intrinsic_reward) == ((self.ptr - self.path_start_idx)+1):
+                intrinsic_reward = intrinsic_reward[:-1]
+            assert (self.ptr - self.path_start_idx)  == len(intrinsic_reward), print('intrinsic_reward:',len(intrinsic_reward), 'is not equal to', self.ptr - self.path_start_idx)
+            self.rew_buf[path_slice] += intrinsic_reward
         rews = np.append(self.rew_buf[path_slice], last_val)
         vals = np.append(self.val_buf[path_slice], last_val)
         

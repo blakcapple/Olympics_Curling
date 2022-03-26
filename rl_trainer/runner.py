@@ -16,6 +16,7 @@ from torch.distributions import Categorical
 from spinup.utils.mpi_pytorch import sync_params
 from spinup.utils.mpi_tools import proc_id, mpi_avg
 
+
 def action_check(a):
     a = a if np.isscalar(a) else a[0]
 
@@ -23,7 +24,7 @@ def action_check(a):
     
 class Runner:
 
-    def __init__(self, args, env, policy, opponent, buffer, logger, device, 
+    def __init__(self, args, env, policy, icm_agent, opponent, buffer, logger, device, 
                 action_space, act_dim):
         
         self.total_epoch_step = args.epoch_step
@@ -72,6 +73,9 @@ class Runner:
 
         self._read_history_models() # read history models from dir
         self.last_epoch = 0
+        # ICM intrinsic reward 
+        self.icm = icm_agent
+        self.icm_buffer = []
 
     def _read_history_models(self):
         
@@ -180,6 +184,7 @@ class Runner:
 
     def rollout(self, epochs):
         
+        agent_index = np.random.randint(2)
         agent_index = 0
         ep_len = 0
         ep_ret = 0
@@ -217,6 +222,7 @@ class Runner:
                 print(f'{proc_id()}:load actor_{self.save_index[opponent_number]} as opponent')
 
             t = 0
+            g = 0
             stored_temp = False ## 该标志位表示是否存储了释放冰球时的临界经验数组
             while (t < self.local_steps_per_epoch):
                 if self.render:
@@ -237,17 +243,29 @@ class Runner:
                                                   torch.as_tensor(info_ctrl[newaxis], dtype=torch.float32, device=self.device))
                 opponent_a = self.opponent.act(torch.as_tensor(obs_oppo[newaxis], dtype=torch.float32, device=self.device),
                                                   torch.as_tensor(info_oppo[newaxis], dtype=torch.float32, device=self.device))
+                if action_end:
+                    a = opponent_a
                 env_a = self._wrapped_action(action_check(a), action_check(opponent_a))
                 raw_next_o, r, d, info_before, info_after = self.env.step(env_a)
                 next_o = self.obs_transform(raw_next_o, o)
                 # 更新release状态
                 next_release = next_o['release'][agent_index] 
                 next_action_end = True if next_release else False
+
+                # collect data for icm training ; estimate intrinsic reward
+                if not action_end:
+                    icm_data = {'obs':torch.as_tensor(obs_ctrl[-1][newaxis], dtype=torch.float32, device=self.device), 
+                                'action':torch.as_tensor(a, dtype=torch.long, device=self.device), 
+                                'next_obs': torch.as_tensor(next_o['obs'][agent_index][-1][newaxis], dtype=torch.float32, device=self.device)}
+                    # 加入buffer中
+                    self.icm_buffer.append(icm_data)
+
+
                 # 记忆临界状态
-                if next_action_end and not stored_temp:
+                if next_action_end and not stored_temp and who_is_throwing == agent_index:
                     temp_experience = [obs_ctrl, info_ctrl, a, r[agent_index], v, logp]
                     stored_temp = True 
-                if any(r) !=0 :
+                if info_after == 'round_end' or info_after == 'game1_end' or info_after == 'game2_end':
                     false_d = True
                     stored_temp = False  # False 
                 else: false_d = False
@@ -263,10 +281,14 @@ class Runner:
                         self.buffer.store(*(temp_experience))
                         self.logger.store(VVals=temp_experience[4])
                         t += 1
+                        # if proc_id() == 2:
+                        #     print(proc_id(), 'buffer:', self.buffer.ptr-self.buffer.path_start_idx)
                     else:
                         self.buffer.store(obs_ctrl, info_ctrl, a, r[agent_index], v, logp)
                         self.logger.store(VVals=v)
                         t += 1
+                        # if proc_id() == 2:
+                        #     print(proc_id(), 'buffer:', self.buffer.ptr-self.buffer.path_start_idx)
 
                 o = next_o
                 epoch_ended = t==(self.local_steps_per_epoch)
@@ -279,7 +301,12 @@ class Runner:
                                                    torch.as_tensor(o['info'][agent_index][newaxis], dtype=torch.float32, device=self.device) )
                     else:
                         v = 0
-                    self.buffer.finish_path(v)
+                    # icm collect and estimate
+                    self.icm.collect_data(self.icm_buffer)
+                    self.icm.estimate(self.icm_buffer)
+                    intrinsic_reward = [self.icm_buffer[i]['intrinsic_reward'] for i in range(len(self.icm_buffer))]
+                    self.icm_buffer.clear()
+                    self.buffer.finish_path(v, intrinsic_reward)
                     if d:
                         episode +=1
                         epoch_reward.append(ep_ret)
@@ -294,15 +321,17 @@ class Runner:
                     o = self.env.reset()
                     o = self.obs_transform(o, None)
 
+            self.icm.train()
+            self.icm_buffer.clear()
             data = self.buffer.get()
             # update policy
             self.policy.learn(data)
-            # Log info about epoch
+            # # Log info about epoch
             if (epoch+1) % self.log_interval == 0:
-                self.logger.log_tabular('Epoch', epoch)
                 self.logger.log_tabular('Win', average_only=True)
                 self.logger.log_tabular('EpRet', with_min_and_max=True)
                 self.logger.log_tabular('EpLen', average_only=True)
+                self.logger.log_tabular('Epoch', epoch)
                 self.logger.log_tabular('VVals', with_min_and_max=True)
                 self.logger.log_tabular('TotalEnvInteracts', (epoch+1)*self.total_epoch_step)
                 self.logger.log_tabular('LossPi', average_only=True)
@@ -313,25 +342,29 @@ class Runner:
                 self.logger.log_tabular('KL', average_only=True)
                 self.logger.log_tabular('ClipFrac', average_only=True)
                 self.logger.log_tabular('Time', time.time()-start_time)
+                self.logger.log_tabular('IcmForwardLoss', average_only=True)
+                self.logger.log_tabular('IcmInverseLoss', average_only=True)
                 self.logger.dump_tabular()
 
             # update the model score 
-            mean_win = np.mean(win_is)
-            if mean_win >= 0.5:
-                if sample_distribution is not None: 
-                    self.model_score[opponent_number] -= 0.01 / (len(self.save_index) * sample_distribution.probs[opponent_number]) * (mean_win-0.5)
-                else:
-                    self.model_score[opponent_number] -= 0.01 * (mean_win-0.5)
-            if self.id == 0:
-                print("model_score", self.model_score)
+            # mean_win = np.mean(win_is)
+            # if mean_win >= 0.5:
+            #     if sample_distribution is not None: 
+            #         self.model_score[opponent_number] -= 0.01 / (len(self.save_index) * sample_distribution.probs[opponent_number]) * (mean_win-0.5)
+            #     else:
+            #         self.model_score[opponent_number] -= 0.01 * (mean_win-0.5)
+            # if self.id == 0:
+            #     print("model_score", self.model_score)
 
             if epoch % self.save_interval == 0 or epoch == (epochs-1) and epoch > 0:
                 sync_params(self.policy.ac)
+                sync_params(self.icm.reward_model)
                 self.save_index.append(self.load_index+epoch)
                 self.model_score = torch.cat((self.model_score, torch.tensor([1])))
                 assert self.model_score.shape[0] == len(self.save_index), print('the score length is not equal with the model length')
                 if self.id == 0:
                     self.policy.save_models(self.load_index+epoch)
+                    self.icm.save_models(self.load_index+epoch)
             
 
 
