@@ -66,11 +66,13 @@ def run_game(env, algo_list, episode, verbose=False):
         state = env.reset()
         if RENDER:
             env.env_core.render()
-            pdb.set_trace()
         step = 0
 
         while True:
-            joint_action = get_join_actions(state, algo_list)
+            if step <= 12:
+                joint_action = [[[50],[0]],[[0],[0]]]
+            else:
+                joint_action = get_join_actions(state, algo_list)
             next_state, reward, done, _, info = env.step(joint_action)
             reward = np.array(reward)
             episode_reward += reward
@@ -109,7 +111,7 @@ def run_game(env, algo_list, episode, verbose=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--my_ai", default='rl', help='rl/random')
-    parser.add_argument("--opponent", default='rl_base', help='rl/random')
+    parser.add_argument("--opponent", default='rl', help='rl/random')
     parser.add_argument("--episode", default=1)
     args = parser.parse_args()
 

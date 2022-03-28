@@ -288,7 +288,8 @@ class curling(OlympicsBase):
 
 
         done = self.is_terminal()
-
+        info = '' # 记录比赛状态
+        pos_info = self.agent_pos[-1] # 记录智能体位置信息
         if not done:
             round_end, end_info = self._round_terminal()
             if round_end:
@@ -319,7 +320,7 @@ class curling(OlympicsBase):
                     raise NotImplementedError
 
 
-
+                info = 'round_end'
                 obs_next = self._reset_round()
 
             else:
@@ -351,7 +352,7 @@ class curling(OlympicsBase):
                 self.temp_winner = self.final_winner
                 # step_reward = [100., 0] if self.final_winner == 0 else [0., 100]
                 self.view_terminal = True
-
+                info = 'game2_end'
             elif self.game_round == 0:
 
                 self._clear_agent()
@@ -360,8 +361,8 @@ class curling(OlympicsBase):
                 self.cal_game_point()
                 self.game_round += 1
                 next_obs = self.reset(reset_game=True)
-
-                return next_obs, reward, False, 'game1 ends, switch position'
+                info = 'game1_end'
+                return next_obs, reward, False, pos_info, info
             else:
                 raise NotImplementedError
 
@@ -377,7 +378,7 @@ class curling(OlympicsBase):
             self.gamma = h_gamma
 
         #return self.agent_pos, self.agent_v, self.agent_accel, self.agent_theta, obs_next, step_reward, done
-        return obs_next, reward, done, ''
+        return obs_next, reward, done, pos_info, info
 
     # def get_obs_encode(self):
     #     obs = self.get_obs()

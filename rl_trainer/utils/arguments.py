@@ -16,6 +16,8 @@ def read_args():
     parser.add_argument('--action_type', default=0, type=int, help='1 is continuous and 0 is discrete')
     parser.add_argument('--action_num', default=49, type=int, help='how many different actions')
     parser.add_argument('--render', default=False, action='store_true')
+    parser.add_argument('--goalx', default=300, type=int)
+    parser.add_argument('--goaly', default=500, type=int)
     # ppo parameters
     parser.add_argument('--pi_lr', default=3e-4, type=float)
     parser.add_argument('--v_lr', default=5e-4, type=float)

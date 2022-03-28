@@ -77,8 +77,7 @@ class OlympicsCurling(Game):
         self.is_valid_action(joint_action)
         info_before = self.step_before_info()
         joint_action_decode = self.decode(joint_action)
-        all_observations, reward, done, info_after = self.env_core.step(joint_action_decode)
-        info_after = ''
+        all_observations, reward, done, pos_info, info_after = self.env_core.step(joint_action_decode)
         self.current_state = all_observations
 
         self.current_game_round = self.env_core.game_round
@@ -93,7 +92,7 @@ class OlympicsCurling(Game):
         if self.done:
             self.set_n_return()
 
-        return self.all_observes, reward, self.done, info_before, info_after
+        return self.all_observes, reward, self.done, pos_info, info_after
 
 
 

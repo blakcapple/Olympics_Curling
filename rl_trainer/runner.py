@@ -1,5 +1,6 @@
 from curses import raw
 from random import random
+from turtle import pos
 from numpy import newaxis
 import torch 
 import numpy as np 
@@ -13,7 +14,24 @@ from gym.spaces import Box, Discrete
 import re
 from torch.distributions import Categorical
 from spinup.utils.mpi_pytorch import sync_params
-from spinup.utils.mpi_tools import num_procs, proc_id
+from spinup.utils.mpi_tools import mpi_statistics_scalar, proc_id
+import math
+
+def write_to_file(file, goal, reward):
+    with open(file, 'a') as file_object:
+        file_object.write(f'goal:{goal}; ')
+        file_object.write(f'reward:{reward} \n')
+
+
+def get_reward(pos, center):
+
+    if pos[1] < 352:
+        reward = -10
+        return reward
+    distance = math.sqrt((pos[0]-center[0])**2 + (pos[1]-center[1])**2)
+    reward = 1 / (distance + 1) * 1000# distance reward 
+
+    return reward
 
 class Runner:
 
@@ -30,6 +48,7 @@ class Runner:
         self.selfplay_interval = args.selfplay_interval
         self.save_interval = args.save_interval
         self.eval_interval = args.eval_interval
+        self.render =  args.render 
         self.env = env
         self.policy = policy 
         self.buffer = buffer
@@ -44,7 +63,9 @@ class Runner:
         self.save_index = [] # the models pool
         self.id = proc_id()
         self.actions_map = self._set_actions_map(args.action_num)
-        self.render = args.render 
+        self.center = [args.goalx, args.goaly] # the goal of agent
+        self.continue_train = True # if stop training 
+
 
     def _read_history_models(self):
         
@@ -111,6 +132,7 @@ class Runner:
 
     def rollout(self, epochs):
 
+        best_ret = -np.inf
         ep_len = 0
         ep_ret = 0
         start_time = time.time()
@@ -121,6 +143,8 @@ class Runner:
         o = self.obs_transform(raw_o, None)
     # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
+            if not self.continue_train:
+                break
             t = 0
             stored_temp = False ## 该标志位表示是否存储了释放冰球时的临界经验数组
             while (t < self.local_steps_per_epoch):
@@ -130,7 +154,15 @@ class Runner:
                     who_is_throwing = 1
                 else:
                     who_is_throwing = 0
-
+                # 前n步规则控制
+                while (ep_len <= 12): 
+                    env_a = [[[50],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[50],[0]]]
+                    raw_next_o, _, _, pos_info, info = self.env.step(env_a)
+                    next_o = self.obs_transform(raw_next_o, o)
+                    o = next_o
+                    ep_len += 1
+                    if self.render:
+                        self.env.env_core.render()
                 obs = o['obs'][who_is_throwing]
                 release = o['release'][who_is_throwing]
                 action_end = True if release else False # 冰球投掷出去后，不受动作控制
@@ -138,20 +170,25 @@ class Runner:
                 if not action_end:
                     a, v, logp = self.policy.step(torch.as_tensor(obs[newaxis], dtype=torch.float32, device=self.device))
                 env_a = self._wrapped_action(a, who_is_throwing)
-                raw_next_o, r, d, info_before, info_after = self.env.step(env_a[0])
+                raw_next_o, _, d, pos_info, info = self.env.step(env_a[0])
                 next_o = self.obs_transform(raw_next_o, o)
                 # 更新release状态
                 next_release = next_o['release'][who_is_throwing] 
                 next_action_end = True if next_release else False
                 # 记忆临界状态
                 if next_action_end and not stored_temp:
-                    temp_experience = [obs, a, r, v, logp]
+                    temp_experience = [obs, a, 0, v, logp]
                     stored_temp = True 
-                if r !=0 :
+                if info == 'round_end' or info == 'game1_end' or info == 'game2_end' :
                     false_d = True
                     stored_temp = False  # False 
                 else: false_d = False
-                ep_ret += r
+                if false_d:
+                    # 根据预期目标点和pos计算奖励
+                    reward = get_reward(pos_info, self.center)
+                else: reward = 0
+
+                ep_ret += reward
                 ep_len += 1 
 
                 # save and log
@@ -159,12 +196,12 @@ class Runner:
                 if not stored_temp:
                     # 冰球得到延迟奖励后，更新临界时的经验数组，并存储到buffer中
                     if action_end:
-                        temp_experience[2] = r
+                        temp_experience[2] = reward
                         self.buffer.store(*(temp_experience))
                         self.logger.store(VVals=temp_experience[3])
                         t += 1
                     else:
-                        self.buffer.store(obs, a, r, v, logp)
+                        self.buffer.store(obs, a, reward, v, logp)
                         self.logger.store(VVals=v)
                         t += 1
 
@@ -185,8 +222,8 @@ class Runner:
                         self.logger.store(EpRet=ep_ret, EpLen=ep_len)
                         # 每一轮投掷结束之后，obs序列重置
                         o = self.obs_transform(raw_next_o, None)
-                    ep_ret, ep_len =  0, 0
-                if d:
+                        ep_ret, ep_len =  0, 0
+                if false_d:
                     o = self.env.reset()
                     o = self.obs_transform(o, None)
 
@@ -194,6 +231,7 @@ class Runner:
             # update policy
             self.policy.learn(data)
             # Log info about epoch
+            avg_KL, _ = mpi_statistics_scalar(self.logger.epoch_dict['KL'])
             self.logger.log_tabular('Epoch', epoch)
             self.logger.log_tabular('EpRet', with_min_and_max=True)
             self.logger.log_tabular('EpLen', average_only=True)
@@ -208,11 +246,25 @@ class Runner:
             self.logger.log_tabular('ClipFrac', average_only=True)
             self.logger.log_tabular('Time', time.time()-start_time)
             self.logger.dump_tabular()
-            # wandb.log({'Reward':np.mean(epoch_reward)}, step=epoch)
-            if epoch % self.save_interval == 0 or epoch == (epochs-1) and epoch > 0:
+            avg_ret,_ = mpi_statistics_scalar(np.array(epoch_reward))
+            epoch_reward = []
+            # 保存最好的模型
+            if best_ret < avg_ret:
+                best_ret = avg_ret
+                sync_params(self.policy.ac)
+                if self.id == 0:
+                    self.policy.save_models()
+            # KL收敛后则停止训练
+            if avg_KL <= 0.0001 or epoch == (epochs-1):
+                self.continue_train = False
+                # 记录最好的奖励值到文件中
+                if self.id == 0:
+                    write_to_file('recorde.txt', self.center, best_ret)
+            if epoch % self.save_interval == 0 and epoch > 0 or not self.continue_train:
                 sync_params(self.policy.ac)
                 if self.id == 0:
                     self.policy.save_models(index=epoch)
+
 
 
 
