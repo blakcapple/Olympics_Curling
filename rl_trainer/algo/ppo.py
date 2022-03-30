@@ -13,7 +13,7 @@ class PPO:
 
     def __init__(self, state_shape, action_space, pi_lr, v_lr, device, logger, max_size, 
                 batch_size, clip_ratio=0.2, entropy_c=0, train_pi_iters=80, train_v_iters=80, 
-                target_kl=0.01, max_grad_norm=0.5, save_dir='data/models'):
+                target_kl=0.01, max_grad_norm=0.5, save_path='data/models'):
 
         self.ac = CNNActorCritic(state_shape, action_space).to(device)
         self.clip_ratio = clip_ratio
@@ -23,7 +23,7 @@ class PPO:
         self.train_v_iters = train_v_iters
         self.target_kl = target_kl
         self.logger = logger
-        self.check_point_dir = os.path.join(save_dir, 'models')
+        self.check_point_dir = os.path.join(save_path, 'models')
         os.makedirs(self.check_point_dir, exist_ok=True)
         self.max_grad_norm = max_grad_norm
         self.max_size = max_size
@@ -33,9 +33,9 @@ class PPO:
     def compute_loss_pi(self, data):
         
         data = deepcopy(data)
-        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
+        obs, info, act, adv, logp_old = data['obs'], data['info'], data['act'], data['adv'], data['logp']
         # Policy loss
-        pi, logp = self.ac.pi(obs, act)
+        pi, logp = self.ac.pi(obs, info, act)
         ratio = torch.exp(logp - logp_old)
         clip_adv = torch.clamp(ratio, 1-self.clip_ratio, 1+self.clip_ratio) * adv
         loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
@@ -54,9 +54,9 @@ class PPO:
     def compute_loss_v(self, data):
         
         data = deepcopy(data)
-        obs, ret = data['obs'], data['ret']
+        obs, info, ret = data['obs'], data['info'], data['ret']
 
-        return ((self.ac.v(obs) - ret)**2).mean()
+        return ((self.ac.v(obs, info) - ret)**2).mean()
 
     def learn(self, data):
 
@@ -115,16 +115,15 @@ class PPO:
         self.ac.v.load_model(critic_pth)
         self.ac.pi.load_model(actor_pth)
 
-    def select_action(self, obs, phase='train'):
+    def select_action(self, obs, info, phase='train'):
 
-        a = self.ac.act(obs, phase)
+        a = self.ac.act(obs, info, phase)
         
         return a 
 
-    def step(self, obs):
+    def step(self, obs, info):
 
-        a, v, logp = self.ac.step(obs)
+        a, v, logp = self.ac.step(obs, info)
 
         return a, v, logp 
-
 

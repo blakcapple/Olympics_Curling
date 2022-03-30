@@ -5,7 +5,7 @@ import torch.nn as nn
 import numpy as np 
 
 
-class random_agent:
+class random_opponent:
     def __init__(self, action_space, seed=0):
 
         self.action_space = action_space
@@ -14,19 +14,16 @@ class random_agent:
     def seed(self, seed = None):
         random.seed(seed)
 
-    def act(self, obs):
-        actions = []
+    def act(self, obs, info):
         if isinstance(self.action_space, Discrete):
-            for _ in range(obs.shape[0]):
-                a = random.randint(0, self.action_space.n-1)
-                actions.append(a)
-        if isinstance(self.action_space, Box):
-            for _ in range(obs.shape[0]):
-                a =  np.random.uniform([-1, -1], [1, 1])
-                actions.append(a)
-        return actions
+            a = random.randint(0, self.action_space.n-1)
 
-class rl_agent:
+        if isinstance(self.action_space, Box):
+            a =  np.random.uniform([-1, -1], [1, 1])
+        
+        return a
+
+class rl_opponent:
     
     def __init__(self, state_shape, action_space, device):
         
@@ -35,9 +32,9 @@ class rl_agent:
         elif isinstance(action_space, Discrete):
             self.actor = CNNCategoricalActor(state_shape, action_space.n, nn.ReLU).to(device)
 
-    def act(self, obs):
+    def act(self, obs, info):
 
-        pi, _ = self.actor(obs)
+        pi, _ = self.actor(obs, info)
         a_raw = pi.sample()
         
         return a_raw.detach().cpu().numpy()

@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.distributions import Categorical, Normal
 from rl_trainer.algo.cnn import CNNLayer
 import numpy as np 
@@ -64,21 +63,26 @@ class CNNCategoricalActor(nn.Module):
         self.input_shape = input_shape
         self.act_dim = act_dim 
         self.cnn_layer = CNNLayer(input_shape)
-        self.linear_layer = mlp([256]+[256]+[act_dim], activation)
-        self.logits_net = nn.Sequential(self.cnn_layer, self.linear_layer)
+        # [game_round:2, throws left:8, score:2, player:2]
+        self.extra_layer = mlp([14]+[64], activation) 
+        self.linear_layer = mlp([256+64]+[256]+[act_dim], activation)
         
-    def distribution(self, obs):
-        logits = self.logits_net(obs)
+    def distribution(self, obs, info):
+        cnn_out = self.cnn_layer(obs)
+        extra_out = self.extra_layer(info)
+        full_out = torch.cat([cnn_out, extra_out], dim=1)
+        logits = self.linear_layer(full_out)
+
         return Categorical(logits=logits)
 
     def log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act)
 
-    def forward(self, obs, act=None):
+    def forward(self, obs, info, act=None):
         # Produce action distributions for given observations, and 
         # optionally compute the log likelihood of given actions under
         # those distributions.
-        pi = self.distribution(obs)
+        pi = self.distribution(obs, info)
         logp_a = None
         if act is not None:
             logp_a = self.log_prob_from_distribution(pi, act.view(-1))
@@ -90,11 +94,15 @@ class CNNCategoricalActor(nn.Module):
     def load_model(self, pth):
         self.load_state_dict(torch.load(pth))
 
-    def eval(self, obs):
+    def eval(self, obs, info):
         """
         return the best action
         """
-        logits = self.logits_net(obs).view(-1)
+        cnn_out = self.cnn_layer(obs)
+        extra_out = self.extra_layer(info)
+        full_out = torch.cat([cnn_out, extra_out], dim=1)
+        logits = self.linear_layer(full_out)
+
         return torch.argmax(logits).item()
         
 
@@ -104,12 +112,17 @@ class CNNCritic(nn.Module):
         super().__init__()
         self.input_shape = input_shape
         self.cnn_layer = CNNLayer(input_shape)
-        self.linear_layer = mlp([256]+[256]+[1], activation)
-        self.v_net = nn.Sequential(self.cnn_layer, self.linear_layer)
+        self.extra_layer = mlp([14]+[64], activation) 
+        self.linear_layer = mlp([256+64]+[256]+[1], activation)
 
-    def forward(self, obs):
+    def forward(self, obs, info):
+        
+        cnn_out = self.cnn_layer(obs)
+        extra_out = self.extra_layer(info)
+        full_out = torch.cat([cnn_out, extra_out], dim=1)
+        v = self.linear_layer(full_out)
 
-        return torch.squeeze(self.v_net(obs), -1)
+        return torch.squeeze(v, -1)
 
     def save_model(self, pth):
         torch.save(self.state_dict(), pth)
@@ -129,32 +142,19 @@ class CNNActorCritic(nn.Module):
         self.v = CNNCritic(state_shape, activation)
         self.ob_sequence = None # the observation sequence (length:4)
     
-    def step(self, obs):
+    def step(self, obs, info):
         with torch.no_grad():
-            pi = self.pi.distribution(obs)
+            pi = self.pi.distribution(obs, info)
             a = pi.sample()
             logp_a = self.pi.log_prob_from_distribution(pi, a)
-            v = self.v(obs)
+            v = self.v(obs, info)
 
         return a.detach().cpu().numpy(), v.detach().cpu().numpy(), logp_a.detach().cpu().numpy()
 
-    def act(self, obs, phase='train'):
+    def act(self, obs, info, phase='train'):
         if phase == 'test':
-            return self.pi.eval(obs)
+            return self.pi.eval(obs, info)
         elif phase == 'train':
-            return self.step(obs)[0]
+            return self.step(obs, info)[0]
         else:
             raise NotImplementedError
-
-
-
-
-
-
-
-
-    
-
-
-
-

@@ -1,10 +1,7 @@
-from curses import raw
-from random import random
-from turtle import pos
 from numpy import newaxis
 import torch 
 import numpy as np 
-from rl_trainer.algo.opponent import random_agent, rl_agent
+from rl_trainer.algo.agent import random_agent, rl_agent
 import time
 import os 
 import pdb

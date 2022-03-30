@@ -302,12 +302,6 @@ class curling(OlympicsBase):
                     del self.agent_theta[-1]
                     del self.agent_accel[-1]
                     self.agent_num -= 1
-                if self.release:
-                    reward = 1 / (self.get_reward() + 1) * 1000# distance reward 
-                    # if len(self.agent_pos) == (self.best_agent()+1):
-                    #     reward += 10 
-                else:
-                    reward = -10 # if not release, give penalty 
                 self.temp_winner, min_d = self.current_winner()
                 #step_reward = [1,0.] if self.temp_winner == 0 else [0., 1]          #score for each round
                 if self.temp_winner == -1:
@@ -325,14 +319,7 @@ class curling(OlympicsBase):
 
             else:
                 step_reward = [0., 0.]
-                reward = 0
         else:
-            if self.release:
-                reward = 1 / (self.get_reward() + 1) * 1000# distance reward 
-                # if len(self.agent_pos) == (self.best_agent()+1):
-                #     reward += 10 
-            else:
-                reward = -10 # if not release, give penalty 
             if self.game_round == 1:
                 # self.final_winner, min_d = self.current_winner()
                 # self.temp_winner = self.final_winner
@@ -341,10 +328,10 @@ class curling(OlympicsBase):
 
                 if self.purple_game_point > self.green_game_point:
                     self.final_winner = 0
-                    step_reward = [100., 0]
+                    step_reward = [100., -50] # give penalty if lose the game
                 elif self.green_game_point > self.purple_game_point:
                     self.final_winner = 1
-                    step_reward = [0., 100.]
+                    step_reward = [-50., 100.]
                 else:
                     self.final_winner = -1
                     step_reward = [0.,0.]
@@ -362,7 +349,7 @@ class curling(OlympicsBase):
                 self.game_round += 1
                 next_obs = self.reset(reset_game=True)
                 info = 'game1_end'
-                return next_obs, reward, False, pos_info, info
+                return next_obs, step_reward, False, pos_info, info
             else:
                 raise NotImplementedError
 
@@ -378,7 +365,7 @@ class curling(OlympicsBase):
             self.gamma = h_gamma
 
         #return self.agent_pos, self.agent_v, self.agent_accel, self.agent_theta, obs_next, step_reward, done
-        return obs_next, reward, done, pos_info, info
+        return obs_next, step_reward, done, pos_info, info
 
     # def get_obs_encode(self):
     #     obs = self.get_obs()
