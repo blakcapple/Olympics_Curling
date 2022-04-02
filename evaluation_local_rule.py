@@ -25,8 +25,9 @@ def get_join_actions(state, algo_list):
 
             obs = state[agent_idx]['obs']
             index = state[agent_idx]['controlled_player_index']
-            throws_left = state[agent_idx]['throws left'][index]
+            throws_left = state[agent_idx]['throws left']
             color = state[agent_idx]['team color']
+            agent_base.set_agent_idx(index)
             obs = np.array(obs)
             actions = agent_base.choose_action(obs, throws_left, color, True)
             joint_actions.append([[actions[0]], [actions[1]]])
@@ -35,8 +36,9 @@ def get_join_actions(state, algo_list):
         elif algo_list[agent_idx] == 'rl':
             obs = state[agent_idx]['obs']
             index = state[agent_idx]['controlled_player_index']
-            throws_left = state[agent_idx]['throws left'][index]
+            throws_left = state[agent_idx]['throws left']
             color = state[agent_idx]['team color']
+            agent.set_agent_idx(index)
             obs = np.array(obs)
             actions = agent.choose_action(obs, throws_left, color, True)
             joint_actions.append([[actions[0]], [actions[1]]])
@@ -99,7 +101,7 @@ def run_game(env, algo_list, episode, verbose=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--my_ai", default='rl_base', help='rl/random')
+    parser.add_argument("--my_ai", default='random', help='rl/random')
     parser.add_argument("--opponent", default='rl', help='rl/random')
     parser.add_argument("--episode", default=1)
     args = parser.parse_args()

@@ -7,6 +7,7 @@ import numpy as np
 from gym.spaces import Box, Discrete
 import math 
 from copy import deepcopy
+import pdb
 
 ##----------------------------------------------
 ##---This block is for rule helper----
@@ -250,6 +251,10 @@ class RLAgent:
     gamma = 0.98
     delta_t = 0.1
     mass = 1 
+    fix_forward_count = 21
+    fix_forward_force = 50
+    fix_backward_force = -100
+    fix_backward_count = 24
 
     def __init__(self, state_shape, action_space):
         
@@ -286,6 +291,14 @@ class RLAgent:
         self.oppo_numner = 0
         # 规则阶段 1表示已经智能体停止，2表示智能体完成转向计算，3表示完成转向
         self.stage = 0
+        # 表征是否是最后一个投掷回合（考虑对手的）
+        self.last_throw = False
+        # 智能体的模型集合
+        self.model_pth = []
+
+    def set_model_pth(self, pth):
+
+        self.model_pth = pth
 
     def reset(self):
     
@@ -297,6 +310,13 @@ class RLAgent:
         self.ep_count = 0
         self.obs_sequence = None
         self.stage = 0
+        self.last_throw = False
+        # 加载默认的模型
+        self.load_model(self.model_pth[0])
+    
+    def set_agent_idx(self, idx):
+
+        self.agent_idx = idx 
 
     def _action_to_accel(self, action):
         """
@@ -326,82 +346,116 @@ class RLAgent:
         # 更新智能体速度和位置
         self._update_physics()
 
+    def get_model_action(self, deterministic):
+        """
+        产生强化学习模型的动作
+        """
+        obs_sequence  = self.obs_sequence.unsqueeze(0)
+        if self.is_act_continuous:
+            if deterministic:
+                a_raw = self.actor.mu_net(obs_sequence)
+            else:
+                pi, _ = self.actor(obs_sequence)
+                a_raw = pi.sample()
+        else:
+            if deterministic:
+                logits = self.actor.logits_net(obs_sequence)
+                a_raw = torch.argmax(logits)
+            else:
+                pi, _ = self.actor(obs_sequence)
+                a_raw = pi.sample()
+        actions = self.actions_map[a_raw.item()]
+        return actions
+
+    def get_rule_action(self):
+        """
+        得到基于规则的动作
+        """
+        # 选择距离中心点最近的对手作为撞击对象
+        if self.ep_count == self.fix_forward_count+1:
+            if len(self.oppo_pos) > 1:
+                min_dist = -np.inf 
+                for i, pos in enumerate(self.oppo_pos):
+                    dist = np.linalg.norm([pos[0] - 300, pos[1] - 500])
+                    if dist < min_dist:
+                        dist = min_dist
+                        self.oppo_numner = i
+        # 让智能体先停止下来(比例控制)
+        elif self.stage == 0:
+            if np.abs(self.v[1] - 0) >= 0.1:
+                k_gain = 15
+                force = -k_gain*(self.v[1] - 0)
+                force = np.clip(force, -100, 200)
+                actions = [force, 0]
+            else: 
+                self.stage = 1
+                pdb.set_trace()
+        # 让智能体完成对目标位置的转向
+        if self.stage == 1:
+            delta = np.array(self.oppo_pos[self.oppo_numner]) - np.array(self.pose)
+            delta = delta.reshape(-1)
+            radius = math.atan2(delta[0], delta[1])
+            delta_theta = math.degrees(radius)
+            self.goal_theta  = self.theta - delta_theta
+            self.stage = 2
+        if self.stage == 2:
+            if self.theta != self.goal_theta:
+                theta = self.goal_theta - self.theta
+                theta = np.clip(theta, -30, 30)
+                actions  = [0, theta]
+            else: self.stage =3
+        # 冲向目标位置
+        if self.stage == 3:
+            actions = [200, 0]
+        return actions
+    
+    def _store_oppo_pos(self, color, obs):
+
+        """
+        存储有价值的冰壶位置信息
+        """
+
+        opponent_color = 'green' if color=='purple' else 'purple'
+        self.oppo_pos = calculate_pos(obs.reshape(30, 30), opponent_color, self.pose)
+        if len(self.oppo_pos) > 0:
+            temp = deepcopy(self.oppo_pos)
+            for pos in temp:
+                if np.linalg.norm([pos[0] - 300, pos[1] - 500]) > 100 and (pos[0] < 234 or pos[0] > 366):
+                    self.oppo_pos.remove(pos)
+
     def choose_action(self, obs, throw_left, color, deterministic=False):
         state = torch.from_numpy(obs).float() # [1, 25, 25]
         # 如果出现throw次数的变化，说明到了新的投掷回合
-        if throw_left != self.throw_left:
-            self.throw_left = throw_left
+        if throw_left[self.agent_idx] != self.throw_left:
+            self.throw_left = throw_left[self.agent_idx]
             self.reset()
+        # 更新智能体的观测序列(放在reset之后)
         if self.obs_sequence is not None:
             self.obs_sequence = torch.cat((self.obs_sequence[1:, :, :], state), dim=0) #[4, 25, 25]
         else:
             self.obs_sequence = state.repeat(4, 1, 1) # [4, 25, 25]
-        if self.ep_count <= 12:
-            actions = [50,0]
-        
-        elif self.ep_count > 12:
-            # 判断场上对方的位置信息（只做一次）
-            if self.ep_count == 13:
-                opponent_color = 'green' if color=='purple' else 'purple'
-                self.oppo_pos = calculate_pos(obs.reshape(30, 30), opponent_color, self.pose)
-                if len(self.oppo_pos) > 0:
-                    temp = deepcopy(self.oppo_pos)
-                    for pos in temp:
-                        if np.linalg.norm([pos[0] - 300, pos[1] - 500]) > 100 and (pos[0] < 234 or pos[0] > 366):
-                            self.oppo_pos.remove(pos)
-            if len(self.oppo_pos) > 0:
-                import pdb
-                # 选择距离中心点最近的对手作为撞击对象
-                if self.ep_count == 13:
-                    if len(self.oppo_pos) > 1:
-                        min_dist = -np.inf 
-                        for i, pos in enumerate(self.oppo_pos):
-                            dist = np.linalg.norm([pos[0] - 300, pos[1] - 500])
-                            if dist < min_dist:
-                                dist = min_dist
-                                self.oppo_numner = i
-                # 让智能体先停止下来(比例控制)
-                if self.stage == 0:
-                    if np.abs(np.linalg.norm(self.v) - 0) >= 0.1:
-                        k_gain = 9
-                        v = np.linalg.norm(self.v)
-                        force = -k_gain*(v - 0)
-                        force = np.clip(force, -100, 200)
-                        actions = [force, 0]
-                    else: self.stage = 1
-                # 让智能体完成对目标位置的转向
-                if self.stage == 1:
-                    delta = np.array(self.oppo_pos[self.oppo_numner]) - np.array(self.pose)
-                    delta = delta.reshape(-1)
-                    radius = math.atan2(delta[0], delta[1])
-                    delta_theta = math.degrees(radius)
-                    self.goal_theta  = self.theta - delta_theta
-                    self.stage = 2
-                if self.stage == 2:
-                    if self.theta != self.goal_theta:
-                        theta = self.goal_theta - self.theta
-                        theta = np.clip(theta, -30, 30)
-                        actions  = [0, theta]
-                    else: self.stage =3
-                # 冲向目标位置
-                if self.stage == 3:
-                    actions = [200, 0]
+        if self.throw_left == 0 and throw_left[1-self.agent_idx] == 0:
+            self.last_throw = True
+        if self.last_throw:
+            # 加载新的策略 仅用于最后一个回合
+            if self.ep_count == 0:
+                self.load_model(self.model_pth[1])
+            actions = self.get_model_action(deterministic)
+            self.ep_count += 1
+            return actions
+        if self.ep_count <= self.fix_forward_count+self.fix_backward_count:
+            if self.ep_count <=self.fix_forward_count:
+                actions = [self.fix_forward_force,0]
             else:
-                obs_sequence  = self.obs_sequence.unsqueeze(0)
-                if self.is_act_continuous:
-                    if deterministic:
-                        a_raw = self.actor.mu_net(obs_sequence)
-                    else:
-                        pi, _ = self.actor(obs_sequence)
-                        a_raw = pi.sample()
-                else:
-                    if deterministic:
-                        logits = self.actor.logits_net(obs_sequence)
-                        a_raw = torch.argmax(logits)
-                    else:
-                        pi, _ = self.actor(obs_sequence)
-                        a_raw = pi.sample()
-                    actions = self.actions_map[a_raw.item()]
+                actions = [self.fix_backward_force, 0]
+                # 判断场上对方的位置信息（只做一次）
+                if self.ep_count == self.fix_forward_count+1:
+                    self._store_oppo_pos(color, obs)
+        else:
+            if len(self.oppo_pos) > 0:
+                actions = self.get_rule_action()
+            else:
+                actions = self.get_model_action(deterministic)
         self.ep_count += 1
         return actions 
 
@@ -418,10 +472,12 @@ action_num = 49
 continue_space = Box(low=np.array([-100, -10]), high=np.array([200, 10]))   
 discrete_space = Discrete(action_num)
 load_pth = os.path.dirname(os.path.abspath(__file__)) + "/actor.pth"
+load_pth2 = os.path.dirname(os.path.abspath(__file__)) + "/actor2.pth"
+load_path_list = [load_pth, load_pth2]
 agent = RLAgent(state_shape, discrete_space)
 agent_base = RLAgent(state_shape, discrete_space)
-agent_base.load_model(load_pth)
-agent.load_model(load_pth)
+agent.set_model_pth(load_path_list)
+agent_base.set_model_pth(load_path_list)
 # agent.save_model(load_pth)
 
 
@@ -430,7 +486,8 @@ def my_controller(observation_list, action_space_list, is_act_continuous):
     ## observation infomation
     obs = observation_list['obs'].copy()
     control_index = observation_list['controlled_player_index']
-    throws_left = observation_list['throws left'][control_index]
+    agent.set_agent_idx(control_index)
+    throws_left = observation_list['throws left']
     color = observation_list['team color']    
     # for RL agent decide action
     obs = np.array(obs)
