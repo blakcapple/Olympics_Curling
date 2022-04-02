@@ -557,7 +557,6 @@ class OlympicsBase(object):
                     accel = [0,0]
                 else:
                     mass = self.agent_list[agent_idx].mass
-
                     assert self.action_f[0] <= action[0] <= self.action_f[1], print('Continuous driving force needs '
                                                                                     'to be within the range [-100,200]')
                     force = action[0] / mass

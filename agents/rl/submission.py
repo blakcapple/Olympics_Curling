@@ -173,34 +173,45 @@ class RLAgent:
             num = action_space.n
             #dicretise action space
             forces = np.linspace(-100, 200, num=int(np.sqrt(num)), endpoint=True)
-            thetas = np.linspace(-30, 30, num=int(np.sqrt(num)), endpoint=True)
+            thetas = np.linspace(-10, 10, num=int(np.sqrt(num)), endpoint=True)
             actions = [[force, theta] for force in forces for theta in thetas]
             actions_map = {i:actions[i] for i in range(num)}
             self.actions_map = actions_map
         self.obs_sequence = None
+        self.throw_left = 4
+        self.ep_count = 0
 
-    def choose_action(self, obs, deterministic=False):
+    def choose_action(self, obs, throw_left, deterministic=False):
         state = torch.from_numpy(obs).float() # [1, 25, 25]
+        # 如果出现throw次数的变化，说明到了新的投掷回合
+        if throw_left != self.throw_left:
+            self.throw_left = throw_left
+            self.ep_count = 0
+            self.obs_sequence = None
         if self.obs_sequence is not None:
             self.obs_sequence = torch.cat((self.obs_sequence[1:, :, :], state), dim=0) #[4, 25, 25]
         else:
             self.obs_sequence = state.repeat(4, 1, 1) # [4, 25, 25]
-        obs_sequence  = self.obs_sequence.unsqueeze(0)
-        if self.is_act_continuous:
-            if deterministic:
-                a_raw = self.actor.mu_net(obs_sequence)
-            else:
-                pi, _ = self.actor(obs_sequence)
-                a_raw = pi.sample()
+        if self.ep_count <= 12:
+            actions = [50,0]
+            self.ep_count += 1
         else:
-            if deterministic:
-                logits = self.actor.logits_net(obs_sequence)
-                a_raw = torch.argmax(logits)
+            obs_sequence  = self.obs_sequence.unsqueeze(0)
+            if self.is_act_continuous:
+                if deterministic:
+                    a_raw = self.actor.mu_net(obs_sequence)
+                else:
+                    pi, _ = self.actor(obs_sequence)
+                    a_raw = pi.sample()
             else:
-                pi, _ = self.actor(obs_sequence)
-                a_raw = pi.sample()
-
-        return a_raw
+                if deterministic:
+                    logits = self.actor.logits_net(obs_sequence)
+                    a_raw = torch.argmax(logits)
+                else:
+                    pi, _ = self.actor(obs_sequence)
+                    a_raw = pi.sample()
+                actions = self.actions_map[a_raw.item()]
+        return actions 
 
     def load_model(self, pth):
 
@@ -214,24 +225,18 @@ state_shape = [4, 30, 30]
 action_num = 49
 continue_space = Box(low=np.array([-100, -10]), high=np.array([200, 10]))   
 discrete_space = Discrete(action_num)
-load_pth = os.path.dirname(os.path.abspath(__file__)) + "/actor_400.pth"
+load_pth = os.path.dirname(os.path.abspath(__file__)) + "/actor.pth"
 agent = RLAgent(state_shape, discrete_space)
 agent.load_model(load_pth)
 # agent.save_model(load_pth)
 
-
 def my_controller(observation_list, action_space_list, is_act_continuous):
     obs = observation_list['obs'].copy()
+    control_index = observation_list['controlled_player_index']
+    throws_left = observation_list['throws left'][control_index]
     obs = np.array(obs)
-    actions_raw = agent.choose_action(obs, True)
-    if agent.is_act_continuous:
-        actions_raw = actions_raw.detach().cpu().numpy().reshape(-1)
-        action = np.clip(actions_raw, -1, 1)
-        high = agent.action_space.high
-        low = agent.action_space.low
-        actions = low + 0.5*(action + 1.0)*(high - low)
-    else:
-        actions = agent.actions_map[actions_raw.item()]
+    actions = agent.choose_action(obs, throws_left, True)
     wrapped_actions = [[actions[0]], [actions[1]]]
+    
     return wrapped_actions
 

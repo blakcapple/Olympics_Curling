@@ -158,3 +158,31 @@ class CNNActorCritic(nn.Module):
             return self.step(obs, info)[0]
         else:
             raise NotImplementedError
+
+class Discrimator(nn.Module):
+    """
+    This module is for GAIL
+    """
+    def __init__(self, obs_shape, info_dim, action_dim, hidden_size=(128, 128), activation='tanh'):
+        super().__init__()
+
+        if activation == 'tanh':
+            self.activation = torch.tanh
+        elif activation == 'relu':
+            self.activation = torch.relu
+        elif activation == 'sigmoid':
+            self.activation = torch.sigmoid
+
+        self.obs_shape = obs_shape
+        self.cnn_layer = CNNLayer(self.obs_shape)
+        self.extra_layer = mlp([info_dim]+[64], self.activation, output_activation=torch.relu) 
+        self.linear_layer = mlp([256+64+action_dim]+hidden_size+[1], self.activation)
+
+    def forward(self, obs, info, action):
+        
+        cnn_out = self.cnn_layer(obs)
+        extra_out = self.extra_layer(info)
+        full_out = torch.cat([cnn_out, extra_out, action], dim=1)
+        d = torch.sigmoid(self.linear_layer(full_out))
+
+        return torch.squeeze(d, -1)

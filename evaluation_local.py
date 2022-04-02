@@ -2,7 +2,7 @@
 import numpy as np
 import torch
 import random
-from agents.rl.rl_model import agent, agent_base
+from agents.rl.submission import agent
 from env.chooseenv import make
 from tabulate import tabulate
 import argparse
@@ -38,16 +38,18 @@ def get_join_actions(state, algo_list):
 
         elif algo_list[agent_idx] == 'rl':
             obs = state[agent_idx]['obs']
+            index = state[agent_idx]['controlled_player_index']
+            throws_left = state[agent_idx]['throws left'][index]
             obs = np.array(obs)
-            actions_raw = agent.choose_action(obs, True)
-            if agent.is_act_continuous:
-                actions_raw = actions_raw.detach().cpu().numpy().reshape(-1)
-                action = np.clip(actions_raw, -1, 1)
-                high = agent.action_space.high
-                low = agent.action_space.low
-                actions = low + 0.5*(action + 1.0)*(high - low)
-            else:
-                actions = agent.actions_map[actions_raw.item()]
+            actions = agent.choose_action(obs, throws_left, True)
+            # if agent.is_act_continuous:
+            #     actions_raw = actions_raw.detach().cpu().numpy().reshape(-1)
+            #     action = np.clip(actions_raw, -1, 1)
+            #     high = agent.action_space.high
+            #     low = agent.action_space.low
+            #     actions = low + 0.5*(action + 1.0)*(high - low)
+            # else:
+            #     actions = agent.actions_map[actions_raw.item()]
             joint_actions.append([[actions[0]], [actions[1]]])
 
     return joint_actions
@@ -69,10 +71,7 @@ def run_game(env, algo_list, episode, verbose=False):
         step = 0
 
         while True:
-            if step <= 12:
-                joint_action = [[[50],[0]],[[0],[0]]]
-            else:
-                joint_action = get_join_actions(state, algo_list)
+            joint_action = get_join_actions(state, algo_list)
             next_state, reward, done, _, info = env.step(joint_action)
             reward = np.array(reward)
             episode_reward += reward
@@ -110,7 +109,7 @@ def run_game(env, algo_list, episode, verbose=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--my_ai", default='rl', help='rl/random')
+    parser.add_argument("--my_ai", default='random', help='rl/random')
     parser.add_argument("--opponent", default='rl', help='rl/random')
     parser.add_argument("--episode", default=1)
     args = parser.parse_args()

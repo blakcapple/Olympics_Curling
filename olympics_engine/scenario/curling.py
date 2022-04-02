@@ -176,7 +176,7 @@ class curling(OlympicsBase):
             return [obs, np.zeros_like(obs)-1]
         else:
             return [np.zeros_like(obs)-1, obs]
-
+            
     def _reset_round(self):
         self.current_team = 1-self.current_team
         #convert last agent to ball
@@ -313,7 +313,6 @@ class curling(OlympicsBase):
                 else:
                     raise NotImplementedError
 
-
                 info = 'round_end'
                 obs_next = self._reset_round()
 
@@ -328,10 +327,10 @@ class curling(OlympicsBase):
 
                 if self.purple_game_point > self.green_game_point:
                     self.final_winner = 0
-                    step_reward = [100., -50] # give penalty if lose the game
+                    step_reward = [100., 0] 
                 elif self.green_game_point > self.purple_game_point:
                     self.final_winner = 1
-                    step_reward = [-50., 100.]
+                    step_reward = [0., 100.]
                 else:
                     self.final_winner = -1
                     step_reward = [0.,0.]

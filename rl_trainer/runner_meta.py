@@ -1,5 +1,7 @@
 from math import floor
+from typing import Dict
 from numpy import newaxis
+from pygame import key
 import torch 
 import numpy as np 
 from rl_trainer.algo.agent import rl_agent
@@ -14,6 +16,42 @@ from torch.distributions import Categorical
 from spinup.utils.mpi_pytorch import sync_params
 from spinup.utils.mpi_tools import mpi_statistics_scalar, proc_id
 import math
+from easydict import EasyDict as edict
+from helper import Physical_Agent
+
+def _calculate_pos(obs, colour, ego_pos=[300, 186]):
+    scalar_y = 10.5
+    scalar_x = 10.5
+    """calculate pos given color"""
+    color_pos = [] # relative pos in the obs
+    color_group = [[] for _ in range (4)]
+    match_number = 5 if colour == 'purple' else 1
+    color_point = np.argwhere(obs == match_number)
+
+    if color_point.shape[0] > 0:
+        # gruop point
+        for x, y in color_point:
+            for i, point_group in enumerate(color_group):
+                if len(point_group) == 0:
+                    color_group[i].append([x,y])
+                    break
+                elif np.abs((x+y)/2 - np.mean(point_group)) < 2:
+                    color_group[i].append([x,y])
+                    break 
+
+    for i, point_group in enumerate(color_group):
+        if len(point_group) > 0:
+            x_mean = np.mean([point_group[i][0] for i in range(len(point_group))])
+            y_mean = np.mean([point_group[i][1] for i in range(len(point_group))])
+            color_pos.append([x_mean, y_mean])
+    relative_pos = color_pos
+    real_pos = []
+    if len(relative_pos) > 0:
+        for pos in relative_pos:
+            pos_x = 450 - pos[1]*scalar_x
+            pos_y = ego_pos[1]+30*scalar_y - pos[0]*scalar_y
+            real_pos.append([pos_x, pos_y])
+    return real_pos
 
 def write_to_file(file, goal, reward):
     with open(file, 'a') as file_object:
@@ -66,7 +104,7 @@ class Runner:
         self.continue_train = True # if stop training 
 
         self.agent_idx = self.id % 2
-
+        self.agent_idx = 1
 
     def _read_history_models(self):
         
@@ -206,6 +244,49 @@ class Runner:
         next_ob = self.obs_transform(raw_next_o, None)
         return next_ob, reward, d
 
+    def run_rule_policy(self, py_agent, agent_idx, purple_pos, ob):
+        done = False
+        k_gain = 1
+        v = np.linalg.norm(py_agent.v)
+        while np.abs(v - 0) >= 0.1:
+            v = np.linalg.norm(py_agent.v)
+            force = -k_gain*(v - 0)
+            force = 200 if force > 200 else force 
+            force = -100 if force < -100 else force 
+            env_a = [[[force],[0]],[[0],[0]]] if agent_idx == 0 else [[[0],[0]],[[force],[0]]]
+            raw_next_o, _, _, pos_info, info = self.env.step(env_a)
+            py_agent.step([force, 0])
+            next_o = self.obs_transform(raw_next_o, ob)
+            ob = next_o
+
+            if self.render:
+                self.env.env_core.render()
+        delta = np.array(purple_pos) - np.array(py_agent.pose)
+        delta = delta.reshape(-1)
+        radius = math.atan2(delta[0], delta[1])
+        delta_theta = math.degrees(radius)
+        goal_theta  = py_agent.theta - delta_theta
+        while (py_agent.theta != goal_theta):
+            theta = goal_theta - py_agent.theta
+            theta = np.clip(theta, -30, 30)
+            py_agent.step([0, theta])
+            env_a = [[[0],[theta]],[[0],[0]]] if agent_idx == 0 else [[[0],[0]],[[0],[theta]]]
+            raw_next_o, _, _, pos_info, info = self.env.step(env_a)
+            next_o = self.obs_transform(raw_next_o, ob)
+            ob = next_o
+            if self.render:
+                self.env.env_core.render()
+        while not done:
+            env_a = [[[200],[0]],[[0],[0]]] if agent_idx == 0 else [[[0],[0]],[[200],[0]]]
+            py_agent.step([200, 0])
+            raw_next_o, _, _, pos_info, info = self.env.step(env_a)
+            next_o = self.obs_transform(raw_next_o, ob)
+            ob = next_o
+            if info == 'round_end' or info == 'game1_end' or info == 'game2_end' :
+                done = True
+            if self.render:
+                self.env.env_core.render()
+
     def rollout(self, epochs):
 
         best_ret = -np.inf
@@ -216,6 +297,7 @@ class Runner:
         epoch_reward = []
         raw_o = self.env.reset()
         o = self.obs_transform(raw_o, None)
+        py_agent = Physical_Agent()
     # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
             if not self.continue_train:
@@ -229,17 +311,17 @@ class Runner:
                     who_is_throwing = 1
                 else:
                     who_is_throwing = 0
-
+                py_agent.reset()
                 # 前n步规则控制
                 while (ep_len <= 12): 
                     env_a = [[[50],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[50],[0]]]
                     raw_next_o, _, _, pos_info, info = self.env.step(env_a)
+                    py_agent.step([50, 0])
                     next_o = self.obs_transform(raw_next_o, o)
                     o = next_o
                     ep_len += 1
                     if self.render:
                         self.env.env_core.render()
-
                 info_ctrl = o['info'][self.agent_idx]
                 info_oppo = o['info'][1-self.agent_idx]
                 obs_ctrl = o['obs'][self.agent_idx][-1]
@@ -282,8 +364,8 @@ class Runner:
                         self.logger.store(Lose=lose_is)
                         self.logger.store(EpRet=ep_ret)
                         # 每一轮投掷结束之后，obs序列重置
-                        o = self.env.reset()
-                        o = self.obs_transform(raw_next_o, None)
+                        raw_o = self.env.reset()
+                        o = self.obs_transform(raw_o, None)
                         ep_ret = 0
 
             data = self.buffer.get()
