@@ -17,6 +17,54 @@ from spinup.utils.mpi_pytorch import sync_params
 from spinup.utils.mpi_tools import mpi_statistics_scalar, proc_id
 import math
 
+class Physical_Agent:
+    
+    gamma = 0.98
+    delta_t = 0.1
+    mass = 1 
+
+    def __init__(self):
+        self.theta = 90 
+        self.pose = [300, 150]
+        self.v =  [0, 0]
+        self.acc = [0, 0]
+
+    def reset(self):
+
+        self.theta = 90 
+        self.pose = [300, 150]
+        self.v =  [0, 0]
+        self.acc = [0, 0]
+
+    def _action_to_accel(self, action):
+        """
+        Convert action(force) to acceleration
+        """
+        self.theta = self.theta + action[1]
+        force = action[0] / self.mass
+        accel_x = force * math.cos(self.theta / 180 * math.pi)
+        accel_y = force * math.sin(self.theta / 180 * math.pi)
+        accel = [accel_x, accel_y]
+        self.acc = accel
+
+    def _update_physics(self):
+        x,y = self.pose
+        vx, vy = self.v
+        accel_x, accel_y = self.acc
+        x_new = x + vx * self.delta_t  # update position with t
+        y_new = y + vy * self.delta_t
+        vx_new = self.gamma * vx + accel_x * self.delta_t  # update v with acceleration
+        vy_new = self.gamma * vy + accel_y * self.delta_t
+        self.v = [vx_new, vy_new]
+        self.pose = [x_new, y_new]
+
+    def step(self, action):
+        # 更新加速度，更新角度
+        self._action_to_accel(action)
+        # 更新智能体速度和位置
+        self._update_physics()
+
+
 def write_to_file(file, goal, reward):
     with open(file, 'a') as file_object:
         file_object.write(f'goal:{goal}; ')
@@ -34,6 +82,11 @@ def get_reward(pos, center):
     return reward
 
 class Runner:
+
+    fix_forward_count = 21
+    fix_forward_force = 50
+    fix_backward_force = -100
+    fix_backward_count = 24
 
     def __init__(self, args, env, policy, opponent, buffer, logger, device, 
                 action_space, act_dim):
@@ -64,9 +117,10 @@ class Runner:
         self.id = proc_id()
         self.actions_map = self._set_actions_map(args.action_num)
         self.center = [args.goalx, args.goaly] # the goal of agent
+        # self.center = [300, 400]
         self.continue_train = True # if stop training 
 
-
+        self.physical = Physical_Agent()
     def _read_history_models(self):
         
         patten = re.compile(r'actor_(?P<index>\d+)')
@@ -155,9 +209,26 @@ class Runner:
                 else:
                     who_is_throwing = 0
                 # 前n步规则控制
-                while (ep_len <= 12): 
-                    env_a = [[[50],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[50],[0]]]
+                while (ep_len <= self.fix_forward_count+self.fix_backward_count): 
+                    if ep_len <= self.fix_forward_count:
+                        env_a = [[[self.fix_forward_force],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[self.fix_forward_force],[0]]]
+                        self.physical.step([self.fix_forward_force, 0])                    
+                    else:
+                        env_a = [[[self.fix_backward_force],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[self.fix_backward_force],[0]]]
+                        self.physical.step([self.fix_backward_force, 0])
                     raw_next_o, _, _, pos_info, info = self.env.step(env_a)
+                    next_o = self.obs_transform(raw_next_o, o)
+                    o = next_o
+                    ep_len += 1
+                    if self.render:
+                        self.env.env_core.render()
+                while np.abs(self.physical.v[1] - 0) >= 0.1:
+                    k_gain = 15
+                    force = -k_gain*(self.physical.v[1] - 0)
+                    force = np.clip(force, -100, 200)
+                    env_a = [[[force],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[force],[0]]]
+                    raw_next_o, _, _, pos_info, info = self.env.step(env_a)
+                    self.physical.step([force, 0])
                     next_o = self.obs_transform(raw_next_o, o)
                     o = next_o
                     ep_len += 1
@@ -226,6 +297,7 @@ class Runner:
                 if false_d:
                     o = self.env.reset()
                     o = self.obs_transform(o, None)
+                    self.physical.reset()
 
             data = self.buffer.get()
             # update policy
