@@ -11,53 +11,6 @@ import pdb
 
 ##----------------------------------------------
 ##---This block is for rule helper----
-class Physical_Agent:
-    
-    gamma = 0.98
-    delta_t = 0.1
-    mass = 1 
-
-    def __init__(self):
-        self.theta = 90 
-        self.pose = [300, 150]
-        self.v =  [0, 0]
-        self.acc = [0, 0]
-
-    def reset(self):
-
-        self.theta = 90 
-        self.pose = [300, 150]
-        self.v =  [0, 0]
-        self.acc = [0, 0]
-
-    def _action_to_accel(self, action):
-        """
-        Convert action(force) to acceleration
-        """
-        self.theta = self.theta + action[1]
-        force = action[0] / self.mass
-        accel_x = force * math.cos(self.theta / 180 * math.pi)
-        accel_y = force * math.sin(self.theta / 180 * math.pi)
-        accel = [accel_x, accel_y]
-        self.acc = accel
-
-    def _update_physics(self):
-        x,y = self.pose
-        vx, vy = self.v
-        accel_x, accel_y = self.acc
-        x_new = x + vx * self.delta_t  # update position with t
-        y_new = y + vy * self.delta_t
-        vx_new = self.gamma * vx + accel_x * self.delta_t  # update v with acceleration
-        vy_new = self.gamma * vy + accel_y * self.delta_t
-        self.v = [vx_new, vy_new]
-        self.pose = [x_new, y_new]
-
-    def step(self, action):
-        # 更新加速度，更新角度
-        self._action_to_accel(action)
-        # 更新智能体速度和位置
-        self._update_physics()
-
 
 def calculate_pos(obs, colour, ego_pos=[300, 186]):
     scalar_y = 10.5
@@ -75,9 +28,12 @@ def calculate_pos(obs, colour, ego_pos=[300, 186]):
                 if len(point_group) == 0:
                     color_group[i].append([x,y])
                     break
-                elif np.abs((x+y)/2 - np.mean(point_group)) < 2:
-                    color_group[i].append([x,y])
-                    break 
+                else:
+                    x_mean = np.mean([point_group[i][0] for i in range(len(point_group))])
+                    y_mean = np.mean([point_group[i][1] for i in range(len(point_group))])
+                    if np.abs(x-x_mean) + np.abs(y-y_mean) < 4:
+                        color_group[i].append([x,y])
+                        break 
 
     for i, point_group in enumerate(color_group):
         if len(point_group) > 0:
@@ -287,18 +243,25 @@ class RLAgent:
 
         # 对手的位置信息
         self.oppo_pos = []
-        # 要撞击的对手索引
-        self.oppo_numner = 0
         # 规则阶段 1表示已经智能体停止，2表示智能体完成转向计算，3表示完成转向
         self.stage = 0
         # 表征是否是最后一个投掷回合（考虑对手的）
         self.last_throw = False
+        # 表征是否是第一个投掷回合（考虑对手的）
+        self.first_throw = False
         # 智能体的模型集合
-        self.model_pth = []
+        self.model_dict = dict()
+        # 要撞击的目标位置
+        self.crush_pos = None
 
-    def set_model_pth(self, pth):
+    def set_model_dict(self, pth, name='normal'):
 
-        self.model_pth = pth
+        self.model_dict[name] = pth
+
+    def set_game_information(self, score, game_round):
+
+        self.score = score
+        self.game_round = game_round
 
     def reset(self):
     
@@ -311,8 +274,7 @@ class RLAgent:
         self.obs_sequence = None
         self.stage = 0
         self.last_throw = False
-        # 加载默认的模型
-        self.load_model(self.model_pth[0])
+        self.first_throw = False
     
     def set_agent_idx(self, idx):
 
@@ -367,32 +329,13 @@ class RLAgent:
         actions = self.actions_map[a_raw.item()]
         return actions
 
-    def get_rule_action(self):
+    def get_rule_action(self, crush_pos):
         """
         得到基于规则的动作
         """
-        # 选择距离中心点最近的对手作为撞击对象
-        if self.ep_count == self.fix_forward_count+1:
-            if len(self.oppo_pos) > 1:
-                min_dist = -np.inf 
-                for i, pos in enumerate(self.oppo_pos):
-                    dist = np.linalg.norm([pos[0] - 300, pos[1] - 500])
-                    if dist < min_dist:
-                        dist = min_dist
-                        self.oppo_numner = i
-        # 让智能体先停止下来(比例控制)
-        elif self.stage == 0:
-            if np.abs(self.v[1] - 0) >= 0.1:
-                k_gain = 15
-                force = -k_gain*(self.v[1] - 0)
-                force = np.clip(force, -100, 200)
-                actions = [force, 0]
-            else: 
-                self.stage = 1
-                pdb.set_trace()
         # 让智能体完成对目标位置的转向
         if self.stage == 1:
-            delta = np.array(self.oppo_pos[self.oppo_numner]) - np.array(self.pose)
+            delta = np.array(crush_pos) - np.array(self.pose)
             delta = delta.reshape(-1)
             radius = math.atan2(delta[0], delta[1])
             delta_theta = math.degrees(radius)
@@ -410,18 +353,44 @@ class RLAgent:
         return actions
     
     def _store_oppo_pos(self, color, obs):
-
         """
         存储有价值的冰壶位置信息
         """
-
+        crush_pos = None
         opponent_color = 'green' if color=='purple' else 'purple'
         self.oppo_pos = calculate_pos(obs.reshape(30, 30), opponent_color, self.pose)
+        self.own_pos = calculate_pos(obs.reshape(30, 30), color, self.pose)
         if len(self.oppo_pos) > 0:
-            temp = deepcopy(self.oppo_pos)
-            for pos in temp:
-                if np.linalg.norm([pos[0] - 300, pos[1] - 500]) > 100 and (pos[0] < 234 or pos[0] > 366):
-                    self.oppo_pos.remove(pos)
+            oppo_temp = deepcopy(self.oppo_pos)
+            for pos in self.oppo_pos:
+                # 距离场地大于一定的距离则无视
+                if np.linalg.norm([pos[0] - 300, pos[1] - 500]) > 105 and pos[1] > 500 or pos[0]<200 or pos[0]> 400:
+                    oppo_temp.remove(pos)
+                    continue 
+                # 继续判断与目标冰球连线上是否存在己方冰球
+                if len(self.own_pos) > 0 and len(oppo_temp) > 0:
+                    delta = np.array(pos) - np.array(self.pose)
+                    delta = delta.reshape(-1)
+                    radius_oppo = math.atan2(delta[0], delta[1])
+                    for pos2 in self.own_pos:
+                        delta = np.array(pos2) - np.array(self.pose)
+                        delta = delta.reshape(-1)
+                        radius_own = math.atan2(delta[0], delta[1])
+                        # 角度在3度之内且自己的冰壶距离中心点更近则移除这个点
+                        if np.abs(radius_oppo-radius_own) <= 5/180*np.pi:
+                            if np.linalg.norm([pos[0]-300, pos[1]-500]) > np.linalg.norm([pos2[0]-300, pos2[1]-500]):
+                                oppo_temp.remove(pos)
+            # 选择距离中心点最近的对手作为撞击对象
+            if len(oppo_temp) > 1:
+                min_dist = np.inf 
+                for i, pos in enumerate(oppo_temp):
+                    dist = np.linalg.norm([pos[0] - 300, pos[1] - 500])
+                    if dist < min_dist:
+                        min_dist = dist
+                        crush_pos = pos
+            elif len(oppo_temp) > 0:crush_pos = oppo_temp[0]
+            else: crush_pos=None
+        return crush_pos
 
     def choose_action(self, obs, throw_left, color, deterministic=False):
         state = torch.from_numpy(obs).float() # [1, 25, 25]
@@ -436,11 +405,19 @@ class RLAgent:
             self.obs_sequence = state.repeat(4, 1, 1) # [4, 25, 25]
         if self.throw_left == 0 and throw_left[1-self.agent_idx] == 0:
             self.last_throw = True
-        if self.last_throw:
-            # 加载新的策略 仅用于最后一个回合
-            if self.ep_count == 0:
-                self.load_model(self.model_pth[1])
-            actions = self.get_model_action(deterministic)
+        if self.throw_left == 3 and throw_left[1-self.agent_idx] == 4:
+            self.first_throw = True
+        if self.first_throw:
+            # 加载新策略,仅用于第一个回合
+            if self.pose[1] < 310:
+                actions = [15, 0]
+            elif np.abs(self.v[1] - 16) >= 0.1:
+                k_gain = 15
+                force = -k_gain*(self.v[1] - 16)
+                force = np.clip(force, -100, 200)
+                actions = [force, 0]
+            else:
+                actions = [0,0]
             self.ep_count += 1
             return actions
         if self.ep_count <= self.fix_forward_count+self.fix_backward_count:
@@ -450,11 +427,32 @@ class RLAgent:
                 actions = [self.fix_backward_force, 0]
                 # 判断场上对方的位置信息（只做一次）
                 if self.ep_count == self.fix_forward_count+1:
-                    self._store_oppo_pos(color, obs)
-        else:
-            if len(self.oppo_pos) > 0:
-                actions = self.get_rule_action()
+                    self.crush_pos = self._store_oppo_pos(color, obs)
+        # 让智能体先停止下来(比例控制)
+        elif self.stage == 0:
+            if np.abs(self.v[1] - 0) >= 0.1:
+                k_gain = 15
+                force = -k_gain*(self.v[1] - 0)
+                force = np.clip(force, -100, 200)
+                actions = [force, 0]
+            else: 
+                self.stage = 1
+        if self.stage != 0:
+            if self.last_throw == True:
+                win = self._current_winner()
+                if self.game_round == 1:
+                    point = self._current_point()
+                    # 如果判断已经稳赢的情况下，则不做任何动作，避免风险
+                    if self.score[self.agent_idx]+point > self.score[1-self.agent_idx]:
+                        self.ep_count += 1
+                        return [0,0]
+                if win:
+                    self.crush_pos = None            
+            if self.crush_pos is not None:
+                actions = self.get_rule_action(self.crush_pos)
             else:
+                load_name = self.decide_model()
+                self.load_model(self.model_dict[load_name])
                 actions = self.get_model_action(deterministic)
         self.ep_count += 1
         return actions 
@@ -467,18 +465,120 @@ class RLAgent:
 
         self.actor.save_model(pth)
 
+    def decide_model(self):
+        """
+        根据场上的信息来选择用哪个模型
+        """
+        win = self._current_winner()
+        record = []
+        load_name = None
+        if win:
+            if self.throw_left == 0:
+                load_name = 'center'
+                return load_name
+            if len(self.oppo_pos) > 0:
+                for pos in self.oppo_pos:
+                    if np.abs(pos[0] - 300) < 10:
+                        load_name = 'right'
+                        break
+            if len(self.own_pos) > 0 and load_name !='right':
+                for point in self.own_pos:
+                    if point[0] > 300:
+                        if point[1] > 500:
+                            record.append('right_down')
+                        if point[0] < 500:
+                            record.append('right_up')
+                    elif point[0] < 300:
+                        if point[1] > 500:
+                            record.append('left_down')
+                        if point[0] < 500:
+                            record.append('left_up')
+                if 'right_down' not in record:
+                    load_name = 'down'
+                elif 'right_up' not in record:
+                    load_name = 'right'
+                elif 'left_down' not in record:
+                    load_name = 'left'
+                elif 'left_up' not in record:
+                    load_name = 'up'
+                else: load_name = 'center'
+        else:
+            load_name = 'center'
+        return load_name
+
+    def _current_winner(self):
+        """
+        得到目前场上的胜方
+        """
+        if len(self.oppo_pos) > 0:
+            oppo_dist = self._get_mindist(self.oppo_pos)
+        else:
+            oppo_dist = 1e4 ## 
+        if len(self.own_pos) > 0:
+            team_dist = self._get_mindist(self.own_pos)
+        else: 
+            team_dist = 1e4 ## 
+        win = True if oppo_dist > team_dist else False
+
+        return win 
+
+    def _get_mindist(self, point_list):
+        mini_dist = np.inf
+        for point in point_list:
+            distance = np.linalg.norm(np.array(point) - [300,500])
+            if distance < mini_dist:
+                mini_dist = distance
+        return mini_dist
+
+    def _current_point(self):
+        """
+        得到目前场上的分数信息
+        """
+        point = 0
+        if len(self.oppo_pos) > 0:
+            mindist = self._get_mindist(self.oppo_pos)
+        else:
+            mindist = 67
+        if len(self.own_pos):
+            for pos in self.own_pos:
+                distance = np.linalg.norm((np.array(pos) - np.array([300, 500])))
+                if mindist > distance:
+                    point += 1
+        if point == 0:
+            if len(self.oppo_pos) > 0:
+                mindist = self._get_mindist(self.own_pos)
+            else:
+                mindist = 67
+            if len(self.oppo_pos) > 0:
+                for pos in self.oppo_pos:
+                    distance = np.linalg.norm((np.array(pos) - np.array([300, 500])))
+                    if mindist > distance:
+                        point -= 1
+        return point 
+
 state_shape = [4, 30, 30]
 action_num = 49
 continue_space = Box(low=np.array([-100, -10]), high=np.array([200, 10]))   
 discrete_space = Discrete(action_num)
-load_pth = os.path.dirname(os.path.abspath(__file__)) + "/actor.pth"
-load_pth2 = os.path.dirname(os.path.abspath(__file__)) + "/actor2.pth"
-load_path_list = [load_pth, load_pth2]
+load_right = os.path.dirname(os.path.abspath(__file__)) + "/actor_right.pth"
+load_left = os.path.dirname(os.path.abspath(__file__)) + "/actor_left.pth"
+load_center = os.path.dirname(os.path.abspath(__file__)) + "/actor_center.pth"
+load_top = os.path.dirname(os.path.abspath(__file__)) + "/actor_top.pth"
+load_down = os.path.dirname(os.path.abspath(__file__)) + "/actor_down.pth"
+
+
 agent = RLAgent(state_shape, discrete_space)
 agent_base = RLAgent(state_shape, discrete_space)
-agent.set_model_pth(load_path_list)
-agent_base.set_model_pth(load_path_list)
-# agent.save_model(load_pth)
+agent.set_model_dict(load_center, 'center')
+agent.set_model_dict(load_right, 'right')
+agent.set_model_dict(load_left, 'left')
+agent.set_model_dict(load_top, 'up')
+agent.set_model_dict(load_down, 'down')
+agent_base.set_model_dict(load_center, 'center')
+agent_base.set_model_dict(load_right, 'right')
+agent_base.set_model_dict(load_left, 'left')
+agent_base.set_model_dict(load_top, 'up')
+agent_base.set_model_dict(load_down, 'down')
 
 
 def my_controller(observation_list, action_space_list, is_act_continuous):
@@ -488,7 +588,10 @@ def my_controller(observation_list, action_space_list, is_act_continuous):
     control_index = observation_list['controlled_player_index']
     agent.set_agent_idx(control_index)
     throws_left = observation_list['throws left']
-    color = observation_list['team color']    
+    color = observation_list['team color']
+    score_point = observation_list['score']
+    game_round = observation_list['game round']
+    agent.set_game_information(score_point, game_round)
     # for RL agent decide action
     obs = np.array(obs)
     actions = agent.choose_action(obs, throws_left, color, True)

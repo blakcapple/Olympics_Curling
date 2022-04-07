@@ -2,7 +2,7 @@
 import numpy as np
 import torch
 import random
-from agents.rl.submission import agent
+from agents.rl.submission_center import agent
 from env.chooseenv import make
 from tabulate import tabulate
 import argparse
@@ -109,7 +109,7 @@ def run_game(env, algo_list, episode, verbose=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--my_ai", default='random', help='rl/random')
+    parser.add_argument("--my_ai", default='rl_base', help='rl/random')
     parser.add_argument("--opponent", default='rl', help='rl/random')
     parser.add_argument("--episode", default=1)
     args = parser.parse_args()

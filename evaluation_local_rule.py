@@ -2,7 +2,9 @@
 import numpy as np
 import torch
 import random
-from agents.rl.submission_rule import agent, agent_base
+from agents.rl.submission_rule import agent
+from agents.rl.submission_origin import agent as agent_base
+# from agents.rl.submission_center import agent as agent_base
 from env.chooseenv import make
 from tabulate import tabulate
 import argparse
@@ -25,11 +27,11 @@ def get_join_actions(state, algo_list):
 
             obs = state[agent_idx]['obs']
             index = state[agent_idx]['controlled_player_index']
-            throws_left = state[agent_idx]['throws left']
+            throws_left = state[agent_idx]['throws left'][agent_idx]
             color = state[agent_idx]['team color']
-            agent_base.set_agent_idx(index)
             obs = np.array(obs)
             actions = agent_base.choose_action(obs, throws_left, color, True)
+            # actions = agent_base.choose_action(obs, throws_left, True)
             joint_actions.append([[actions[0]], [actions[1]]])
             agent_base.step([actions[0], actions[1]])
 
@@ -38,6 +40,9 @@ def get_join_actions(state, algo_list):
             index = state[agent_idx]['controlled_player_index']
             throws_left = state[agent_idx]['throws left']
             color = state[agent_idx]['team color']
+            score_point = state[agent_idx]['score']
+            game_round = state[agent_idx]['game round']
+            agent.set_game_information(score_point, game_round)
             agent.set_agent_idx(index)
             obs = np.array(obs)
             actions = agent.choose_action(obs, throws_left, color, True)
@@ -101,7 +106,7 @@ def run_game(env, algo_list, episode, verbose=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--my_ai", default='random', help='rl/random')
+    parser.add_argument("--my_ai", default='rl_base', help='rl/random')
     parser.add_argument("--opponent", default='rl', help='rl/random')
     parser.add_argument("--episode", default=1)
     args = parser.parse_args()

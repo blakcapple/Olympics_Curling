@@ -58,20 +58,21 @@ class CNNGaussianActor(nn.Module):
 
 class CNNCategoricalActor(nn.Module):
 
-    def __init__(self, input_shape, act_dim, activation):
+    def __init__(self, input_shape, act_dim, activation, info_dim=None):
         super().__init__()
         self.input_shape = input_shape
         self.act_dim = act_dim 
         self.cnn_layer = CNNLayer(input_shape)
-        # [game_round:2, throws left:8, score:2, player:2]
-        self.extra_layer = mlp([14]+[64], activation) 
-        self.linear_layer = mlp([256+64]+[256]+[act_dim], activation)
+        # self.extra_layer = mlp([info_dim]+[64], activation) 
+        # self.linear_layer = mlp([256+64]+[256]+[act_dim], activation)
+        self.linear_layer = mlp([256]+[256]+[act_dim], activation)
+
         
     def distribution(self, obs, info):
         cnn_out = self.cnn_layer(obs)
-        extra_out = self.extra_layer(info)
-        full_out = torch.cat([cnn_out, extra_out], dim=1)
-        logits = self.linear_layer(full_out)
+        # extra_out = self.extra_layer(info)
+        # full_out = torch.cat([cnn_out, extra_out], dim=1)
+        logits = self.linear_layer(cnn_out)
 
         return Categorical(logits=logits)
 
@@ -108,19 +109,20 @@ class CNNCategoricalActor(nn.Module):
 
 class CNNCritic(nn.Module):
 
-    def __init__(self, input_shape, activation):
+    def __init__(self, input_shape, activation, info_dim=None):
         super().__init__()
         self.input_shape = input_shape
         self.cnn_layer = CNNLayer(input_shape)
-        self.extra_layer = mlp([14]+[64], activation) 
-        self.linear_layer = mlp([256+64]+[256]+[1], activation)
+        # self.extra_layer = mlp([info_dim]+[64], activation) 
+        # self.linear_layer = mlp([256+64]+[256]+[1], activation)
+        self.linear_layer = mlp([256]+[256]+[1], activation)
 
     def forward(self, obs, info):
         
         cnn_out = self.cnn_layer(obs)
-        extra_out = self.extra_layer(info)
-        full_out = torch.cat([cnn_out, extra_out], dim=1)
-        v = self.linear_layer(full_out)
+        # extra_out = self.extra_layer(info)
+        # full_out = torch.cat([cnn_out, extra_out], dim=1)
+        v = self.linear_layer(cnn_out)
 
         return torch.squeeze(v, -1)
 
@@ -132,15 +134,14 @@ class CNNCritic(nn.Module):
 
 class CNNActorCritic(nn.Module):
     
-    def __init__(self, state_shape, action_space, activation=nn.ReLU):
+    def __init__(self, state_shape, action_space, activation=nn.ReLU, info_dim=None):
         super().__init__()
 
         if isinstance(action_space, Box):
             self.pi = CNNGaussianActor(state_shape, action_space.shape[0], activation)
         elif isinstance(action_space, Discrete):
-            self.pi = CNNCategoricalActor(state_shape, action_space.n, activation)
-        self.v = CNNCritic(state_shape, activation)
-        self.ob_sequence = None # the observation sequence (length:4)
+            self.pi = CNNCategoricalActor(state_shape, action_space.n, activation, info_dim)
+        self.v = CNNCritic(state_shape, activation, info_dim)
     
     def step(self, obs, info):
         with torch.no_grad():
