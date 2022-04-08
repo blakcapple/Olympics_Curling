@@ -83,10 +83,10 @@ def get_reward(pos, center):
 
 class Runner:
 
-    fix_forward_count = 21
-    fix_forward_force = 50
+    fix_forward_count = 12
+    fix_forward_force = 100
     fix_backward_force = -100
-    fix_backward_count = 24
+    fix_backward_count = 25
 
     def __init__(self, args, env, policy, opponent, buffer, logger, device, 
                 action_space, act_dim):
@@ -121,6 +121,7 @@ class Runner:
         self.continue_train = True # if stop training 
 
         self.physical = Physical_Agent()
+
     def _read_history_models(self):
         
         patten = re.compile(r'actor_(?P<index>\d+)')
@@ -223,7 +224,7 @@ class Runner:
                     if self.render:
                         self.env.env_core.render()
                 while np.abs(self.physical.v[1] - 0) >= 0.1:
-                    k_gain = 15
+                    k_gain = 17
                     force = -k_gain*(self.physical.v[1] - 0)
                     force = np.clip(force, -100, 200)
                     env_a = [[[force],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[force],[0]]]
