@@ -11,11 +11,11 @@ from spinup.utils.mpi_tools import mpi_avg
 
 class PPO:
 
-    def __init__(self, state_shape, action_space, pi_lr, v_lr, device, logger, max_size, 
+    def __init__(self, state_shape, extra_dim, action_space, pi_lr, v_lr, device, logger, max_size, 
                 batch_size, clip_ratio=0.2, entropy_c=0, train_pi_iters=80, train_v_iters=80, 
                 target_kl=0.01, max_grad_norm=0.5, save_dir='data/models'):
 
-        self.ac = CNNActorCritic(state_shape, action_space).to(device)
+        self.ac = CNNActorCritic(state_shape, extra_dim, action_space).to(device)
         self.clip_ratio = clip_ratio
         self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
         self.v_optimizer = Adam(self.ac.v.parameters(), lr=v_lr)
@@ -33,9 +33,9 @@ class PPO:
     def compute_loss_pi(self, data):
         
         data = deepcopy(data)
-        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
+        obs, extra_obs, act, adv, logp_old = data['obs'], data['info'], data['act'], data['adv'], data['logp']
         # Policy loss
-        pi, logp = self.ac.pi(obs, act)
+        pi, logp = self.ac.pi(obs, extra_obs, act)
         ratio = torch.exp(logp - logp_old)
         clip_adv = torch.clamp(ratio, 1-self.clip_ratio, 1+self.clip_ratio) * adv
         loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
@@ -54,9 +54,9 @@ class PPO:
     def compute_loss_v(self, data):
         
         data = deepcopy(data)
-        obs, ret = data['obs'], data['ret']
+        obs, extra_obs, ret = data['obs'], data['info'], data['ret']
 
-        return ((self.ac.v(obs) - ret)**2).mean()
+        return ((self.ac.v(obs, extra_obs) - ret)**2).mean()
 
     def learn(self, data):
 
@@ -121,9 +121,9 @@ class PPO:
         
         return a 
 
-    def step(self, obs):
+    def step(self, obs, extra_obs):
 
-        a, v, logp = self.ac.step(obs)
+        a, v, logp = self.ac.step(obs, extra_obs)
 
         return a, v, logp 
 

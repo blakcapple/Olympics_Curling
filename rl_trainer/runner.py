@@ -29,6 +29,15 @@ class Physical_Agent:
         self.v =  [0, 0]
         self.acc = [0, 0]
 
+    def wrap(self, action):
+        
+        self.theta = self.theta + action 
+        if self.theta > 180:
+            self.theta -= 360
+        elif self.theta < -180:
+            self.theta += 360 
+        return self.theta
+
     def reset(self):
 
         self.theta = 90 
@@ -40,7 +49,7 @@ class Physical_Agent:
         """
         Convert action(force) to acceleration
         """
-        self.theta = self.theta + action[1]
+        self.theta = self.wrap(action[1])
         force = action[0] / self.mass
         accel_x = force * math.cos(self.theta / 180 * math.pi)
         accel_y = force * math.sin(self.theta / 180 * math.pi)
@@ -117,7 +126,7 @@ class Runner:
         self.id = proc_id()
         self.actions_map = self._set_actions_map(args.action_num)
         self.center = [args.goalx, args.goaly] # the goal of agent
-        # self.center = [300, 400]
+        self.center = [300, 400]
         self.continue_train = True # if stop training 
 
         self.physical = Physical_Agent()
@@ -185,6 +194,13 @@ class Runner:
 
         return dict 
 
+    def get_extra_info(self):
+
+        info =self.center + self.physical.pose + self.physical.v + [self.physical.theta/180*np.pi]
+        info = np.array(info)
+        info[:4] /= 10
+        return info
+
     def rollout(self, epochs):
 
         best_ret = -np.inf
@@ -238,18 +254,25 @@ class Runner:
                 obs = o['obs'][who_is_throwing]
                 release = o['release'][who_is_throwing]
                 action_end = True if release else False # 冰球投掷出去后，不受动作控制
+                extra_ob = self.get_extra_info()
                 # 在没有过释放冰球前正常采取动作，释放冰球后，所有动作将无效
                 if not action_end:
-                    a, v, logp = self.policy.step(torch.as_tensor(obs[newaxis], dtype=torch.float32, device=self.device))
+                    a, v, logp = self.policy.step(
+                                                torch.as_tensor(obs[newaxis], dtype=torch.float32, device=self.device),
+                                                torch.as_tensor(extra_ob[newaxis], dtype=torch.float32, device=self.device),
+                                                )
+
                 env_a = self._wrapped_action(a, who_is_throwing)
                 raw_next_o, _, d, pos_info, info = self.env.step(env_a[0])
+                pdb.set_trace()
+                self.physical.step(self.actions_map[a.item()])
                 next_o = self.obs_transform(raw_next_o, o)
                 # 更新release状态
                 next_release = next_o['release'][who_is_throwing] 
                 next_action_end = True if next_release else False
                 # 记忆临界状态
                 if next_action_end and not stored_temp:
-                    temp_experience = [obs, a, 0, v, logp]
+                    temp_experience = [obs, extra_ob, a, 0, v, logp]
                     stored_temp = True 
                 if info == 'round_end' or info == 'game1_end' or info == 'game2_end' :
                     false_d = True
@@ -268,23 +291,27 @@ class Runner:
                 if not stored_temp:
                     # 冰球得到延迟奖励后，更新临界时的经验数组，并存储到buffer中
                     if action_end:
-                        temp_experience[2] = reward
+                        temp_experience[3] = reward
                         self.buffer.store(*(temp_experience))
-                        self.logger.store(VVals=temp_experience[3])
+                        self.logger.store(VVals=temp_experience[4])
                         t += 1
                     else:
-                        self.buffer.store(obs, a, reward, v, logp)
+                        self.buffer.store(obs, extra_ob, a, reward, v, logp)
                         self.logger.store(VVals=v)
                         t += 1
 
                 o = next_o
+                extra_info = self.get_extra_info()
                 epoch_ended = t==(self.local_steps_per_epoch)
                 if false_d or epoch_ended:
                     if epoch_ended and not(false_d):
                         print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, flush=True)
                     # if trajectory didn't reach terminal state, bootstrap value target
                     if epoch_ended:
-                        _, v, _ = self.policy.step(torch.as_tensor(o['obs'][who_is_throwing][newaxis], dtype=torch.float32, device=self.device))
+                        _, v, _ = self.policy.step(
+                                    torch.as_tensor(o['obs'][who_is_throwing][newaxis], dtype=torch.float32, device=self.device),
+                                    torch.as_tensor(extra_info[newaxis], dtype=torch.float32, device=self.device)
+                                    )
                     else:
                         v = 0
                     self.buffer.finish_path(v)
@@ -299,6 +326,11 @@ class Runner:
                     o = self.env.reset()
                     o = self.obs_transform(o, None)
                     self.physical.reset()
+
+            goal_x = np.random.randint(200, 400)
+            goal_y = np.random.randint(400, 600)
+            self.center = [goal_x, goal_y]
+            print(self.center)
 
             data = self.buffer.get()
             # update policy

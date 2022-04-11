@@ -49,12 +49,12 @@ def main(args):
     elif args.action_type == 0:
         action_space = Discrete(action_num)
         act_dim = 1
-
+    extra_dim = 7
     device = 'cpu' # spinning up mpi tools only support cpu 
     print('device', device)
     
     local_epoch_step = int(args.epoch_step / args.cpu)
-    policy = PPO(state_shape, action_space, pi_lr=args.pi_lr, v_lr=args.v_lr, device=device, 
+    policy = PPO(state_shape, extra_dim, action_space, pi_lr=args.pi_lr, v_lr=args.v_lr, device=device, 
                 entropy_c = args.entropy_c,logger=logger, clip_ratio=args.clip_ratio, 
                 train_pi_iters=args.train_pi_iters, train_v_iters=args.train_v_iters, 
                 target_kl=args.target_kl, save_dir=args.save_dir, max_grad_norm=args.max_grad_norm, 
@@ -67,7 +67,7 @@ def main(args):
     logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
 
     
-    buffer = PPOBuffer(state_shape, act_dim, local_epoch_step, device, args.gamma, args.lamda)
+    buffer = PPOBuffer(state_shape, extra_dim, act_dim, local_epoch_step, device, args.gamma, args.lamda)
     if args.load:
         policy.load_models(args.load_dir, args.load_index)
         if args.load_opponent_index > 0:

@@ -59,26 +59,31 @@ class CNNGaussianActor(nn.Module):
 
 class CNNCategoricalActor(nn.Module):
 
-    def __init__(self, input_shape, act_dim, activation):
+    def __init__(self, input_shape, extra_dim, act_dim, activation):
         super().__init__()
         self.input_shape = input_shape
         self.act_dim = act_dim 
         self.cnn_layer = CNNLayer(input_shape)
-        self.linear_layer = mlp([256]+[256]+[act_dim], activation)
-        self.logits_net = nn.Sequential(self.cnn_layer, self.linear_layer)
+        self.extra_layer = nn.Linear(extra_dim, 64)
+        self.linear_layer = mlp([256+64]+[256]+[act_dim], activation)
+        # self.logits_net = nn.Sequential(self.cnn_layer, self.linear_layer)
         
-    def distribution(self, obs):
-        logits = self.logits_net(obs)
+    def distribution(self, obs, extra_obs):
+        cnn_out = self.cnn_layer(obs)
+        extra_out = F.relu(self.extra_layer(extra_obs))
+        full_out = torch.cat([cnn_out, extra_out], dim=1)
+        logits = self.linear_layer(full_out)
+        # logits = self.logits_net(obs)
         return Categorical(logits=logits)
 
     def log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act)
 
-    def forward(self, obs, act=None):
+    def forward(self, obs, extra_obs, act=None):
         # Produce action distributions for given observations, and 
         # optionally compute the log likelihood of given actions under
         # those distributions.
-        pi = self.distribution(obs)
+        pi = self.distribution(obs, extra_obs)
         logp_a = None
         if act is not None:
             logp_a = self.log_prob_from_distribution(pi, act.view(-1))
@@ -100,16 +105,20 @@ class CNNCategoricalActor(nn.Module):
 
 class CNNCritic(nn.Module):
 
-    def __init__(self, input_shape, activation):
+    def __init__(self, input_shape, extra_dim, activation):
         super().__init__()
         self.input_shape = input_shape
         self.cnn_layer = CNNLayer(input_shape)
-        self.linear_layer = mlp([256]+[256]+[1], activation)
-        self.v_net = nn.Sequential(self.cnn_layer, self.linear_layer)
+        self.extra_layer = nn.Linear(extra_dim, 64)
+        self.linear_layer = mlp([256+64]+[256]+[1], activation)
+        # self.v_net = nn.Sequential(self.cnn_layer, self.linear_layer)
 
-    def forward(self, obs):
-
-        return torch.squeeze(self.v_net(obs), -1)
+    def forward(self, obs, extra_obs):
+        cnn_out = self.cnn_layer(obs)
+        extra_out = F.relu(self.extra_layer(extra_obs))
+        full_out = torch.cat([cnn_out, extra_out], dim=1)
+        v = self.linear_layer(full_out)
+        return torch.squeeze(v, -1)
 
     def save_model(self, pth):
         torch.save(self.state_dict(), pth)
@@ -119,22 +128,22 @@ class CNNCritic(nn.Module):
 
 class CNNActorCritic(nn.Module):
     
-    def __init__(self, state_shape, action_space, activation=nn.ReLU):
+    def __init__(self, state_shape, extra_dim, action_space, activation=nn.ReLU):
         super().__init__()
 
         if isinstance(action_space, Box):
             self.pi = CNNGaussianActor(state_shape, action_space.shape[0], activation)
         elif isinstance(action_space, Discrete):
-            self.pi = CNNCategoricalActor(state_shape, action_space.n, activation)
-        self.v = CNNCritic(state_shape, activation)
+            self.pi = CNNCategoricalActor(state_shape, extra_dim, action_space.n, activation)
+        self.v = CNNCritic(state_shape, extra_dim, activation)
         self.ob_sequence = None # the observation sequence (length:4)
     
-    def step(self, obs):
+    def step(self, obs, extra_obs):
         with torch.no_grad():
-            pi = self.pi.distribution(obs)
+            pi = self.pi.distribution(obs, extra_obs)
             a = pi.sample()
             logp_a = self.pi.log_prob_from_distribution(pi, a)
-            v = self.v(obs)
+            v = self.v(obs, extra_obs)
 
         return a.detach().cpu().numpy(), v.detach().cpu().numpy(), logp_a.detach().cpu().numpy()
 
