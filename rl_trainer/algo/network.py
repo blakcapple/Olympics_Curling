@@ -61,18 +61,19 @@ class CNNCategoricalActor(nn.Module):
 
     def __init__(self, input_shape, extra_dim, act_dim, activation):
         super().__init__()
-        self.input_shape = input_shape
+        # self.input_shape = input_shape
         self.act_dim = act_dim 
-        self.cnn_layer = CNNLayer(input_shape)
-        self.extra_layer = nn.Linear(extra_dim, 64)
-        self.linear_layer = mlp([256+64]+[256]+[act_dim], activation)
+        # self.cnn_layer = CNNLayer(input_shape)
+        # self.extra_layer = nn.Linear(extra_dim, 64)
+        # self.linear_layer = mlp([256+64]+[256]+[act_dim], activation)
+        self.linear_layer = mlp([extra_dim]+[256]+[256]+[act_dim], activation)
         # self.logits_net = nn.Sequential(self.cnn_layer, self.linear_layer)
         
     def distribution(self, obs, extra_obs):
-        cnn_out = self.cnn_layer(obs)
-        extra_out = F.relu(self.extra_layer(extra_obs))
-        full_out = torch.cat([cnn_out, extra_out], dim=1)
-        logits = self.linear_layer(full_out)
+        # cnn_out = self.cnn_layer(obs)
+        # extra_out = F.relu(self.extra_layer(extra_obs))
+        # full_out = torch.cat([cnn_out, extra_out], dim=1)
+        logits = self.linear_layer(extra_obs)
         # logits = self.logits_net(obs)
         return Categorical(logits=logits)
 
@@ -107,17 +108,18 @@ class CNNCritic(nn.Module):
 
     def __init__(self, input_shape, extra_dim, activation):
         super().__init__()
-        self.input_shape = input_shape
-        self.cnn_layer = CNNLayer(input_shape)
-        self.extra_layer = nn.Linear(extra_dim, 64)
-        self.linear_layer = mlp([256+64]+[256]+[1], activation)
+        # self.input_shape = input_shape
+        # self.cnn_layer = CNNLayer(input_shape)
+        # self.extra_layer = nn.Linear(extra_dim, 64)
+        # self.linear_layer = mlp([256+64]+[256]+[1], activation)
+        self.linear_layer = mlp([extra_dim]+[256]+[256]+[1], activation)
         # self.v_net = nn.Sequential(self.cnn_layer, self.linear_layer)
 
     def forward(self, obs, extra_obs):
-        cnn_out = self.cnn_layer(obs)
-        extra_out = F.relu(self.extra_layer(extra_obs))
-        full_out = torch.cat([cnn_out, extra_out], dim=1)
-        v = self.linear_layer(full_out)
+        # cnn_out = self.cnn_layer(obs)
+        # extra_out = F.relu(self.extra_layer(extra_obs))
+        # full_out = torch.cat([cnn_out, extra_out], dim=1)
+        v = self.linear_layer(extra_obs)
         return torch.squeeze(v, -1)
 
     def save_model(self, pth):

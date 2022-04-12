@@ -1,13 +1,13 @@
 {
     "args":	{
-        "Namespace(action_num=49, action_type=0, algo='ppo', clip_ratio=0.2, cpu=1, entropy_c=0.0, epoch_step=900, eval_interval=100, eval_step=1000, game_name='olympics-curling', gamma=0.99, goalx=300, goaly=500, lamda=0.97, load=True, load_dir='load_model', load_index=None, load_opponent_index=0, max_grad_norm=0.5, mini_batch=3, pi_lr=0.0003, randomplay_epoch=2000, randomplay_interval=10, render=True, save_dir='data/300_500', save_interval=50, save_name='300_500', seed=1, selfplay_interval=40, target_kl=0.03, train_epoch=10000, train_pi_iters=10, train_v_iters=10, v_lr=0.0005)":	{
+        "Namespace(action_num=49, action_type=0, algo='ppo', clip_ratio=0.2, cpu=1, entropy_c=0.0, epoch_step=600, eval_interval=100, eval_step=1000, game_name='olympics-curling', gamma=0.99, goalx=300, goaly=500, lamda=0.97, load=True, load_dir='load_model', load_index=None, load_opponent_index=0, max_grad_norm=0.5, mini_batch=3, pi_lr=0.0003, randomplay_epoch=2000, randomplay_interval=10, render=True, save_dir='data/300_500', save_interval=50, save_name='300_500', seed=1, selfplay_interval=40, target_kl=0.03, train_epoch=10000, train_pi_iters=10, train_v_iters=10, v_lr=0.0005)":	{
             "action_num":	49,
             "action_type":	0,
             "algo":	"ppo",
             "clip_ratio":	0.2,
             "cpu":	1,
             "entropy_c":	0.0,
-            "epoch_step":	900,
+            "epoch_step":	600,
             "eval_interval":	100,
             "eval_step":	1000,
             "game_name":	"olympics-curling",
@@ -39,7 +39,7 @@
     },
     "exp_name":	"ppo",
     "logger":	{
-        "<spinup.utils.logx.EpochLogger object at 0x7fbba9ea7fd0>":	{
+        "<spinup.utils.logx.EpochLogger object at 0x7f742c0a8d30>":	{
             "epoch_dict":	{},
             "exp_name":	"ppo",
             "first_row":	true,

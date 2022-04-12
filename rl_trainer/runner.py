@@ -126,7 +126,7 @@ class Runner:
         self.id = proc_id()
         self.actions_map = self._set_actions_map(args.action_num)
         self.center = [args.goalx, args.goaly] # the goal of agent
-        self.center = [300, 400]
+        self.center = [200, 400]
         self.continue_train = True # if stop training 
 
         self.physical = Physical_Agent()
@@ -196,9 +196,10 @@ class Runner:
 
     def get_extra_info(self):
 
-        info =self.center + self.physical.pose + self.physical.v + [self.physical.theta/180*np.pi]
+        info = self.center + self.physical.pose + self.physical.v + [self.physical.theta/180*np.pi]
         info = np.array(info)
-        info[:4] /= 10
+        info[:6] /= 10
+
         return info
 
     def rollout(self, epochs):
@@ -212,6 +213,7 @@ class Runner:
         raw_o = self.env.reset()
         action_end = False
         o = self.obs_transform(raw_o, None)
+        self.stage = 0
     # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
             if not self.continue_train:
@@ -226,31 +228,33 @@ class Runner:
                 else:
                     who_is_throwing = 0
                 # 前n步规则控制
-                while (ep_len <= self.fix_forward_count+self.fix_backward_count): 
-                    if ep_len <= self.fix_forward_count:
-                        env_a = [[[self.fix_forward_force],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[self.fix_forward_force],[0]]]
-                        self.physical.step([self.fix_forward_force, 0])                    
-                    else:
-                        env_a = [[[self.fix_backward_force],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[self.fix_backward_force],[0]]]
-                        self.physical.step([self.fix_backward_force, 0])
-                    raw_next_o, _, _, pos_info, info = self.env.step(env_a)
-                    next_o = self.obs_transform(raw_next_o, o)
-                    o = next_o
-                    ep_len += 1
-                    if self.render:
-                        self.env.env_core.render()
-                while np.abs(self.physical.v[1] - 0) >= 0.1:
-                    k_gain = 17
-                    force = -k_gain*(self.physical.v[1] - 0)
-                    force = np.clip(force, -100, 200)
-                    env_a = [[[force],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[force],[0]]]
-                    raw_next_o, _, _, pos_info, info = self.env.step(env_a)
-                    self.physical.step([force, 0])
-                    next_o = self.obs_transform(raw_next_o, o)
-                    o = next_o
-                    ep_len += 1
-                    if self.render:
-                        self.env.env_core.render()
+                if self.stage == 0:
+                    while (ep_len <= self.fix_forward_count+self.fix_backward_count): 
+                        if ep_len <= self.fix_forward_count:
+                            env_a = [[[self.fix_forward_force],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[self.fix_forward_force],[0]]]
+                            self.physical.step([self.fix_forward_force, 0])                    
+                        else:
+                            env_a = [[[self.fix_backward_force],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[self.fix_backward_force],[0]]]
+                            self.physical.step([self.fix_backward_force, 0])
+                        raw_next_o, _, _, pos_info, info = self.env.step(env_a)
+                        next_o = self.obs_transform(raw_next_o, o)
+                        o = next_o
+                        ep_len += 1
+                        if self.render:
+                            self.env.env_core.render()
+                    while np.abs(self.physical.v[1] - 0) >= 0.1:
+                        k_gain = 17
+                        force = -k_gain*(self.physical.v[1] - 0)
+                        force = np.clip(force, -100, 200)
+                        env_a = [[[force],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[force],[0]]]
+                        raw_next_o, _, _, pos_info, info = self.env.step(env_a)
+                        self.physical.step([force, 0])
+                        next_o = self.obs_transform(raw_next_o, o)
+                        o = next_o
+                        ep_len += 1
+                        if self.render:
+                            self.env.env_core.render()
+                self.stage = 1
                 obs = o['obs'][who_is_throwing]
                 release = o['release'][who_is_throwing]
                 action_end = True if release else False # 冰球投掷出去后，不受动作控制
@@ -264,7 +268,6 @@ class Runner:
 
                 env_a = self._wrapped_action(a, who_is_throwing)
                 raw_next_o, _, d, pos_info, info = self.env.step(env_a[0])
-                pdb.set_trace()
                 self.physical.step(self.actions_map[a.item()])
                 next_o = self.obs_transform(raw_next_o, o)
                 # 更新release状态
@@ -319,19 +322,15 @@ class Runner:
                         episode +=1
                         epoch_reward.append(ep_ret)
                         self.logger.store(EpRet=ep_ret, EpLen=ep_len)
-                        # 每一轮投掷结束之后，obs序列重置
-                        o = self.obs_transform(raw_next_o, None)
+                        o = self.env.reset()
+                        o = self.obs_transform(o, None)
+                        self.physical.reset()
+                        self.stage = 0
                         ep_ret, ep_len =  0, 0
-                if false_d:
-                    o = self.env.reset()
-                    o = self.obs_transform(o, None)
-                    self.physical.reset()
 
             goal_x = np.random.randint(200, 400)
             goal_y = np.random.randint(400, 600)
             self.center = [goal_x, goal_y]
-            print(self.center)
-
             data = self.buffer.get()
             # update policy
             self.policy.learn(data)
