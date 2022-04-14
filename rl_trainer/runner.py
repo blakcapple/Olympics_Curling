@@ -126,7 +126,7 @@ class Runner:
         self.id = proc_id()
         self.actions_map = self._set_actions_map(args.action_num)
         self.center = [args.goalx, args.goaly] # the goal of agent
-        self.center = [200, 400]
+        self.center = [300, 500]
         self.continue_train = True # if stop training 
 
         self.physical = Physical_Agent()
@@ -328,8 +328,8 @@ class Runner:
                         self.stage = 0
                         ep_ret, ep_len =  0, 0
 
-            goal_x = np.random.randint(200, 400)
-            goal_y = np.random.randint(400, 600)
+            goal_x = np.random.randint(180, 420)
+            goal_y = np.random.randint(380, 700)
             self.center = [goal_x, goal_y]
             data = self.buffer.get()
             # update policy

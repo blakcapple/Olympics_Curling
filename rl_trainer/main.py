@@ -85,7 +85,7 @@ def main(args):
 
 if __name__ == '__main__':
     args = read_args()
-    args.save_name = f'{args.goalx}_{args.goaly}'
+    # args.save_name = f'{args.goalx}_{args.goaly}'
     logger, save_path, log_file = init_log(args.save_dir, args.save_name)
     with open(save_path+'/arguments.txt', 'w') as f:
         json.dump(args.__dict__, f, indent=2)
