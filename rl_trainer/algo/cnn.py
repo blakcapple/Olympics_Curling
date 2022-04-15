@@ -1,5 +1,6 @@
 import torch.nn as nn 
 import torch
+import torch.nn.functional as F
 
 def init(module, weight_init, bias_init, gain=1):
     weight_init(module.weight.data, gain=gain)
@@ -22,7 +23,6 @@ class CNNLayer(nn.Module):
     def __init__(self, state_shape):
         
         super().__init__()
-        
         active_func = [nn.Tanh(), nn.ReLU()][self.use_Relu]
         init_method = [nn.init.xavier_uniform_, nn.init.orthogonal_][self.use_orthogonal]
         gain = nn.init.calculate_gain(['tanh', 'relu'][self.use_Relu])
@@ -31,30 +31,39 @@ class CNNLayer(nn.Module):
         input_height = state_shape[2]
         def init_(m):
             return init(m, init_method, lambda x: nn.init.constant_(x, 0), gain=gain)
-        # cnn1_out_shape = [input_width - self.kernel_size + self.stride, input_height - self.kernel_size + self.stride]
-        # pool_out_shape = [int((cnn1_out_shape[0] - 2)/2) + 1, int((cnn1_out_shape[0] - 2)/2) + 1 ]
-        # cnn2_out_shape = [pool_out_shape[0] - self.kernel_size + self.stride, pool_out_shape[1] - self.kernel_size + self.stride]
-        # # cnn_out_size = cnn2_out_shape[0] * cnn2_out_shape[1] * self.out_channel
-        pool = nn.AvgPool2d(kernel_size=2)
-        self.cnn = nn.Sequential(
-            init_(nn.Conv2d(in_channels=input_channel,
-                            out_channels=self.out_channel,
-                            kernel_size=self.kernel_size,
-                            stride=self.stride)
-                  ),
-            pool,
-            init_(nn.Conv2d(in_channels=self.out_channel,
-                            out_channels=self.out_channel,
-                            kernel_size=self.kernel_size,
-                            stride=self.stride)),
-            active_func,
-            Flatten(),
-                            )
+        self.block = Residual_Block(input_channel, self.out_channel)
+        self.flatten = Flatten()
         with torch.no_grad():
             dummy_ob = torch.ones(1, input_channel, input_width, input_height).float()
-            n_flatten = self.cnn(dummy_ob).shape[1] # 6400
+            cnn_out = self.block(dummy_ob)
+            n_flatten = self.flatten(cnn_out).shape[1]
         self.linear = nn.Sequential(init_(nn.Linear(n_flatten, self.hidden_size)), nn.ReLU())
     def forward(self, input):
-        cnn_output = self.cnn(input)
-        output = self.linear(cnn_output)
+        
+        cnn_output = self.block(input)
+        cnn_flatten = self.flatten(cnn_output)
+        output = self.linear(cnn_flatten)
         return output
+
+class Residual_Block(nn.Module):
+
+    def __init__(self, inplanes, planes, stride=1, kernel_size=3):
+        super().__init__()
+        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=kernel_size, stride=stride,
+                        padding=1, bias = False) # conv2d 和conv3d 的区别
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=kernel_size, stride=stride,
+                        padding=1, bias = False)
+        self.bn2 = nn.BatchNorm2d(planes)
+
+    def forward(self, x):
+        residual = x 
+
+        out = self.conv1(x)
+        out = F.relu(self.bn1(out))
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out += residual 
+        out = F.relu(out)
+
+        return out 

@@ -1,10 +1,7 @@
-from math import floor
-from typing import Dict
+
 from numpy import newaxis
-from pygame import key
 import torch 
 import numpy as np 
-from rl_trainer.algo.agent import rl_agent
 import time
 import os 
 import pdb
@@ -12,66 +9,20 @@ import wandb
 from copy import deepcopy
 from gym.spaces import Box, Discrete
 import re
-from torch.distributions import Categorical
 from spinup.utils.mpi_pytorch import sync_params
 from spinup.utils.mpi_tools import mpi_statistics_scalar, proc_id
 import math
-from easydict import EasyDict as edict
-from helper import Physical_Agent
+from agents.rl.control import low_controller
 
-def _calculate_pos(obs, colour, ego_pos=[300, 186]):
-    scalar_y = 10.5
-    scalar_x = 10.5
-    """calculate pos given color"""
-    color_pos = [] # relative pos in the obs
-    color_group = [[] for _ in range (4)]
-    match_number = 5 if colour == 'purple' else 1
-    color_point = np.argwhere(obs == match_number)
-
-    if color_point.shape[0] > 0:
-        # gruop point
-        for x, y in color_point:
-            for i, point_group in enumerate(color_group):
-                if len(point_group) == 0:
-                    color_group[i].append([x,y])
-                    break
-                elif np.abs((x+y)/2 - np.mean(point_group)) < 2:
-                    color_group[i].append([x,y])
-                    break 
-
-    for i, point_group in enumerate(color_group):
-        if len(point_group) > 0:
-            x_mean = np.mean([point_group[i][0] for i in range(len(point_group))])
-            y_mean = np.mean([point_group[i][1] for i in range(len(point_group))])
-            color_pos.append([x_mean, y_mean])
-    relative_pos = color_pos
-    real_pos = []
-    if len(relative_pos) > 0:
-        for pos in relative_pos:
-            pos_x = 450 - pos[1]*scalar_x
-            pos_y = ego_pos[1]+30*scalar_y - pos[0]*scalar_y
-            real_pos.append([pos_x, pos_y])
-    return real_pos
 
 def write_to_file(file, goal, reward):
     with open(file, 'a') as file_object:
         file_object.write(f'goal:{goal}; ')
         file_object.write(f'reward:{reward} \n')
 
-
-def get_reward(pos, center):
-
-    if pos[1] < 352:
-        reward = -10
-        return reward
-    distance = math.sqrt((pos[0]-center[0])**2 + (pos[1]-center[1])**2)
-    reward = 1 / (distance + 1) * 1000# distance reward 
-
-    return reward
-
 class Runner:
 
-    def __init__(self, args, env, meta_policy, opponent, buffer, logger, device, 
+    def __init__(self, args, env, policy, opponent, buffer, logger, device, 
                 action_space, act_dim):
         
         self.total_epoch_step = args.epoch_step
@@ -86,8 +37,7 @@ class Runner:
         self.eval_interval = args.eval_interval
         self.render =  args.render 
         self.env = env
-        self.meta_policy = meta_policy
-        self.low_policy = rl_agent([4, 30, 30], action_space, device) 
+        self.policy = policy
         self.buffer = buffer
         self.logger = logger 
         self.ep_ret_history = [] 
@@ -100,11 +50,15 @@ class Runner:
         self.load_dir = os.path.join(args.save_path, 'models') # where to load models for opponent
         self.save_index = [] # the models pool
         self.id = proc_id()
-        self.actions_map = self._set_actions_map(args.action_num)
+        self.goals_map = self._set_goal_map(args.action_num-1)
         self.continue_train = True # if stop training 
 
         self.agent_idx = self.id % 2
-        self.agent_idx = 1
+        self.algo_list = ['oppo', 'team'] if self.agent_idx == 1 else ['team', 'oppo']
+        self.color = 'purple' if self.agent_idx == 0 else 'green'
+        # 底层控制器
+        self.team_controller = deepcopy(low_controller)
+        self.oppo_controller = deepcopy(low_controller)
 
     def _read_history_models(self):
         
@@ -118,14 +72,14 @@ class Runner:
         self.model_score = torch.ones(len(self.save_index), dtype=torch.float64) # initialize scores 
         self.logger.info(f'model_score: {self.model_score}')
 
-    def _set_actions_map(self, action_num):
+    def _set_goal_map(self, action_num):
         #dicretise action space
-        forces = np.linspace(-100, 200, num=int(np.sqrt(action_num)), endpoint=True)
-        thetas = np.linspace(-10, 10, num=int(np.sqrt(action_num)), endpoint=True)
-        actions = [[force, theta] for force in forces for theta in thetas]
-        actions_map = {i:actions[i] for i in range(action_num)}
-        return actions_map
-    
+        goalx_set = np.linspace(200, 400, num=int(np.sqrt(action_num)), endpoint=True)
+        goaly_set = np.linspace(400, 700, num=int(np.sqrt(action_num)), endpoint=True)
+        goals = [[goalx, goaly] for goalx in goalx_set for goaly in goaly_set]
+        goals_map = {i:goals[i] for i in range(action_num)}
+        return goals_map
+
     def _wrapped_action(self, action, who_is_throwing):
         # 根据当前回合是谁在投掷冰球来设计动作；无意义的一方的动作为零向量
         if isinstance(self.action_space, Discrete):
@@ -184,108 +138,77 @@ class Runner:
         
         return info 
 
-    def obs_transform(self, obs, obs_sequence_dict):
-    
-        ob_ctrl = obs[0]['obs'][0]
-        ob_oppo = obs[1]['obs'][0]
-
-        ob_ctrl = ob_ctrl.reshape(1, *ob_ctrl.shape)
-        ob_oppo = ob_oppo.reshape(1, *ob_oppo.shape)
-
-        release_ctrl = obs[0]['release']
-        release_oppo = obs[1]['release']
-    
-        info_ctrl = self.get_info(obs, 0)
-        info_oppo = self.get_info(obs, 1)
+    def obs_transform(self, controller, obs, agent_idx):
+        """
+        提取观察到的冰壶信息和游戏信息
+        """
+        team_pos = controller.own_pos
+        oppo_pos = controller.oppo_pos
+        team_info = np.zeros((4, 3))
+        oppo_info = np.zeros((4, 3))
+        for i, pos in enumerate(team_pos):
+            team_info[i] = [pos[0]/10, pos[1]/10, 1]
+        for i, pos in enumerate(oppo_pos):
+            oppo_info[i] = [pos[0]/10, pos[1]/10, 0]
+                    
+        game_info = self.get_info(obs, agent_idx)
+        state = np.concatenate([team_info.reshape(-1), oppo_info.reshape(-1), game_info])
         
-        if obs_sequence_dict is not None:
-            obs_sequence1 = np.concatenate((np.delete(obs_sequence_dict['obs'][0], 0, axis=0), ob_ctrl), axis=0)
-            obs_sequence2 = np.concatenate((np.delete(obs_sequence_dict['obs'][1], 0, axis=0), ob_oppo), axis=0)
-        else:
-            obs_sequence1 = np.repeat(ob_ctrl, 4, axis=0)
-            obs_sequence2 = np.repeat(ob_oppo, 4, axis=0)
-        obs_all = np.append(obs_sequence1[np.newaxis], obs_sequence2[np.newaxis], axis=0)
-        release_all = np.array([release_ctrl, release_oppo])
-        info_all = np.array([info_ctrl, info_oppo])
-        dict = {'obs':obs_all, 'release':release_all, "info":info_all}
+        return state 
 
-        return dict 
+    def get_actions(self, state):
 
-    def get_low_policy(self, x):
-        r"""
-        decide low policy from input
+        joint_actions = []
+
+        for agent_idx in range(len(self.algo_list)):
+
+            if self.algo_list[agent_idx] == 'oppo':
+
+                obs = state[agent_idx]['obs']
+                index = state[agent_idx]['controlled_player_index']
+                throws_left = state[agent_idx]['throws left']
+                color = state[agent_idx]['team color']
+                score_point = state[agent_idx]['score']
+                game_round = state[agent_idx]['game round']
+                self.oppo_controller.set_game_information(score_point, game_round)
+                self.oppo_controller.set_agent_idx(index)
+                obs = np.array(obs)
+                actions = self.oppo_controller.choose_action(obs, throws_left, color, True)
+                joint_actions.append([[actions[0]], [actions[1]]])
+                self.oppo_controller.step([actions[0], actions[1]])
+
+            elif self.algo_list[agent_idx] == 'team':
+                obs = state[agent_idx]['obs']
+                index = state[agent_idx]['controlled_player_index']
+                throws_left = state[agent_idx]['throws left']
+                color = state[agent_idx]['team color']
+                score_point = state[agent_idx]['score']
+                game_round = state[agent_idx]['game round']
+                self.team_controller.set_game_information(score_point, game_round)
+                self.team_controller.set_agent_idx(index)
+                obs = np.array(obs)
+                actions = self.team_controller.choose_action(obs, throws_left, color, True)
+                joint_actions.append([[actions[0]], [actions[1]]])
+                self.team_controller.step([actions[0], actions[1]])
+
+        return joint_actions      
+
+    def run_round_to_end(self, state):
         """
-        x = x if np.isscalar(x) else x[0]
-        goalx = [234+i*33 for i in range(5)][floor(x/6)]
-        goaly = [467+i*33 for i in range(6)][(x-floor(x/6)*6)%6]
-        load_path = os.path.join(self.save_dir, f'{goalx}_{goaly}', 'models', 'actor.pth')
-        self.low_policy.load_model(load_path)
-        return self.low_policy
-
-    def run_low_policy(self, policy, ob, agent_idx):
-
-        r"""
-        when meta-policy decides which low policy to run;
-        this function runs the low policy till the round end
+        执行一个冰壶投掷回合
         """
-
-        done = False
-        while not done:
-            obs = ob['obs'][agent_idx]
-            a = policy.act(torch.as_tensor(obs[newaxis], dtype=torch.float32, device=self.device), True)
-            env_a = self._wrapped_action(a, agent_idx)
-            raw_next_o, reward, d, pos_info, info = self.env.step(env_a)
-            next_ob = self.obs_transform(raw_next_o, ob)
-            ob = next_ob
+        round_done = False
+        while not round_done:
+            joint_actions = self.get_actions(state)
+            next_state, reward, done, _, info = self.env.step(joint_actions)
+            state = next_state
             if info == 'round_end' or info == 'game1_end' or info == 'game2_end' :
-                done = True
+                round_done = True
             if self.render:
                 self.env.env_core.render()
-        next_ob = self.obs_transform(raw_next_o, None)
-        return next_ob, reward, d
-
-    def run_rule_policy(self, py_agent, agent_idx, purple_pos, ob):
-        done = False
-        k_gain = 1
-        v = np.linalg.norm(py_agent.v)
-        while np.abs(v - 0) >= 0.1:
-            v = np.linalg.norm(py_agent.v)
-            force = -k_gain*(v - 0)
-            force = 200 if force > 200 else force 
-            force = -100 if force < -100 else force 
-            env_a = [[[force],[0]],[[0],[0]]] if agent_idx == 0 else [[[0],[0]],[[force],[0]]]
-            raw_next_o, _, _, pos_info, info = self.env.step(env_a)
-            py_agent.step([force, 0])
-            next_o = self.obs_transform(raw_next_o, ob)
-            ob = next_o
-
-            if self.render:
-                self.env.env_core.render()
-        delta = np.array(purple_pos) - np.array(py_agent.pose)
-        delta = delta.reshape(-1)
-        radius = math.atan2(delta[0], delta[1])
-        delta_theta = math.degrees(radius)
-        goal_theta  = py_agent.theta - delta_theta
-        while (py_agent.theta != goal_theta):
-            theta = goal_theta - py_agent.theta
-            theta = np.clip(theta, -30, 30)
-            py_agent.step([0, theta])
-            env_a = [[[0],[theta]],[[0],[0]]] if agent_idx == 0 else [[[0],[0]],[[0],[theta]]]
-            raw_next_o, _, _, pos_info, info = self.env.step(env_a)
-            next_o = self.obs_transform(raw_next_o, ob)
-            ob = next_o
-            if self.render:
-                self.env.env_core.render()
-        while not done:
-            env_a = [[[200],[0]],[[0],[0]]] if agent_idx == 0 else [[[0],[0]],[[200],[0]]]
-            py_agent.step([200, 0])
-            raw_next_o, _, _, pos_info, info = self.env.step(env_a)
-            next_o = self.obs_transform(raw_next_o, ob)
-            ob = next_o
-            if info == 'round_end' or info == 'game1_end' or info == 'game2_end' :
-                done = True
-            if self.render:
-                self.env.env_core.render()
+        self.team_controller.ep_count = 0 
+        self.oppo_controller.ep_count = 0
+        return next_state, reward, done, info
 
     def rollout(self, epochs):
 
@@ -295,82 +218,85 @@ class Runner:
         start_time = time.time()
         episode = 0
         epoch_reward = []
-        raw_o = self.env.reset()
-        o = self.obs_transform(raw_o, None)
-        py_agent = Physical_Agent()
+        obs = self.env.reset()
     # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
             if not self.continue_train:
                 break
-            step = 0
-            x = 0
-            while(step < self.local_steps_per_epoch):
+            for step in range(self.local_steps_per_epoch):
                 if self.render:
                     self.env.env_core.render()
-                if o['obs'][0][-1].all() == 1: # 若全为-1，说明是另一个智能体在投掷冰球
-                    who_is_throwing = 1
+                if self.agent_idx == 0:
+                    while self.team_controller.ep_count < 47:
+                        joint_action = self.get_actions(obs)
+                        next_obs, _,_,_,_=self.env.step(joint_action)
+                        obs = next_obs
+                        if self.render:
+                            self.env.env_core.render()
+                    # 根据策略选择底层策略；底层策略执行到该投掷回合结束
+                    if self.team_controller.ep_count == 47:
+                        state = self.obs_transform(self.team_controller, obs, self.agent_idx)
+                        state = torch.as_tensor(state[newaxis], dtype=torch.float32, device=self.device)
+                        action, value, logp = self.policy.step(state)
+                        if action.item() == 49:
+                            self.team_controller.switch(0) # 转换到规则策略
+                        else:
+                            goal = self.goals_map[action.item()]
+                            self.team_controller.set_goal(goal)
+                            self.team_controller.switch(1) # 转换到RL
+                        next_obs, reward, done, info = self.run_round_to_end(obs)
+                    next_obs, reward, done, info = self.run_round_to_end(next_obs)
                 else:
-                    who_is_throwing = 0
-                py_agent.reset()
-                # 前n步规则控制
-                while (ep_len <= 12): 
-                    env_a = [[[50],[0]],[[0],[0]]] if who_is_throwing == 0 else [[[0],[0]],[[50],[0]]]
-                    raw_next_o, _, _, pos_info, info = self.env.step(env_a)
-                    py_agent.step([50, 0])
-                    next_o = self.obs_transform(raw_next_o, o)
-                    o = next_o
-                    ep_len += 1
-                    if self.render:
-                        self.env.env_core.render()
-                info_ctrl = o['info'][self.agent_idx]
-                info_oppo = o['info'][1-self.agent_idx]
-                obs_ctrl = o['obs'][self.agent_idx][-1]
-                obs_oppo = o['obs'][1-self.agent_idx][-1]
-
-                if who_is_throwing == self.agent_idx:
-                    a, v, logp = self.meta_policy.step(torch.as_tensor(obs_ctrl[newaxis][newaxis], dtype=torch.float32, device=self.device),
-                                                  torch.as_tensor(info_ctrl[newaxis], dtype=torch.float32, device=self.device))
-                    step += 1
-                    low_policy = self.get_low_policy(a)
-                    next_o, reward, done = self.run_low_policy(low_policy, o, self.agent_idx)
-                    self.buffer.store(obs_ctrl[newaxis], info_ctrl, a, reward[self.agent_idx], v, logp)
-                    self.logger.store(VVals=v)
-                else:
-                    a = self.opponent.act(torch.as_tensor(obs_oppo[newaxis][newaxis], dtype=torch.float32, device=self.device),
-                                        torch.as_tensor(info_oppo[newaxis], dtype=torch.float32, device=self.device))
-                    low_policy = self.get_low_policy(a)
-                    next_o, reward, done = self.run_low_policy(low_policy, o, 1 - self.agent_idx)
-                
-                o = next_o
+                    next_obs, reward, done, info = self.run_round_to_end(obs)
+                    while self.team_controller.ep_count < 47:
+                        joint_action = self.get_actions(obs)
+                        next_obs,_,_,_,_ = self.env.step(joint_action)
+                        obs = next_obs
+                        if self.render:
+                            self.env.env_core.render()
+                    # 根据策略选择底层策略；底层策略执行到该投掷回合结束
+                    if self.team_controller.ep_count == 47:
+                        state = self.obs_transform(self.team_controller, obs, self.agent_idx)
+                        state = torch.as_tensor(state[newaxis], dtype=torch.float32, device=self.device)
+                        action, value, logp = self.policy.step(state)
+                        if action.item() == 49:
+                            self.team_controller.switch(0) # 转换到规则策略
+                        else:
+                            goal = self.goals_map[action.item()]
+                            self.team_controller.set_goal(goal)
+                            self.team_controller.switch(1) # 转换到RL
+                        next_obs, reward, done, info = self.run_round_to_end(obs)
+                self.buffer.store(state, action, reward[self.agent_idx], value, logp)
+                self.logger.store(VVals=value)
+                obs = next_obs
                 ep_ret += reward[self.agent_idx]
-                ep_len = 0 
-                epoch_ended = step==(self.local_steps_per_epoch)
+                epoch_ended = step==(self.local_steps_per_epoch-1)
                 if done or epoch_ended:
                     if epoch_ended and not(done):
                         print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, flush=True)
                     # if trajectory didn't reach terminal state, bootstrap value target
                     if epoch_ended:
-                        _, v, _ = self.meta_policy.step(torch.as_tensor(o['obs'][self.agent_idx][-1][newaxis][newaxis], dtype=torch.float32, device=self.device),
-                                                   torch.as_tensor(o['info'][self.agent_idx][newaxis], dtype=torch.float32, device=self.device) )
+                        state = self.obs_transform(self.team_controller, obs, self.agent_idx)
+                        state = torch.as_tensor(state[newaxis], dtype=torch.float32, device=self.device)
+                        _, value, _ = self.policy.step(state)
                     else:
-                        v = 0
-                    self.buffer.finish_path(v)
+                        value = 0
+                    self.buffer.finish_path(value)
                     if done:
                         episode +=1
                         epoch_reward.append(ep_ret)
-                        win_is = 1 if reward[self.agent_idx] == 100 else 0
-                        lose_is = 1 if reward[1-self.agent_idx] == 100 else 0
+                        win_is = 1 if reward[self.agent_idx] > reward[1-self.agent_idx] else 0
+                        lose_is = 1 if reward[self.agent_idx] < reward[1-self.agent_idx] else 0
                         self.logger.store(Win=win_is)
                         self.logger.store(Lose=lose_is)
                         self.logger.store(EpRet=ep_ret)
                         # 每一轮投掷结束之后，obs序列重置
-                        raw_o = self.env.reset()
-                        o = self.obs_transform(raw_o, None)
+                        obs = self.env.reset()
                         ep_ret = 0
 
             data = self.buffer.get()
             # update policy
-            self.meta_policy.learn(data)
+            self.policy.learn(data)
             # Log info about epoch
             avg_KL, _ = mpi_statistics_scalar(self.logger.epoch_dict['KL'])
             self.logger.log_tabular('Win', average_only=True)
@@ -393,9 +319,9 @@ class Runner:
             # 保存最好的模型
             if best_ret < avg_ret:
                 best_ret = avg_ret
-                sync_params(self.meta_policy.ac)
+                sync_params(self.policy.ac)
                 if self.id == 0:
-                    self.meta_policy.save_models()
+                    self.policy.save_models()
             # KL收敛后则停止训练
             if avg_KL <= 0.0001 or epoch == (epochs-1):
                 # self.continue_train = False
@@ -403,9 +329,9 @@ class Runner:
                 if self.id == 0:
                     write_to_file('best_reward.txt', epoch, best_ret)
             if epoch % self.save_interval == 0 and epoch > 0 or not self.continue_train:
-                sync_params(self.meta_policy.ac)
+                sync_params(self.policy.ac)
                 if self.id == 0:
-                    self.meta_policy.save_models(index=epoch)
+                    self.policy.save_models(index=epoch)
 
 
 

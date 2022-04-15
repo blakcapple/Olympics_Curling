@@ -38,7 +38,7 @@ def main(args):
     np.random.seed(args.seed)
     env = make(args.game_name, args.seed)
 
-    state_shape = [4, 30, 30]
+    state_shape = [1, 30, 30]
     action_num = args.action_num
     if args.action_type == 1:
         action_space = Box(low=np.array([-100, -10]), high=np.array([200, 10]))

@@ -42,47 +42,45 @@ def main(args):
     np.random.seed(args.seed)
     env = make(args.game_name, args.seed)
 
-    state_shape = [1, 30, 30]
+    state_shape = 38
     action_num = args.action_num
     if args.action_type == 1:
-        low_action_space = Box(low=np.array([-100, -10]), high=np.array([200, 10]))
+        action_space = Box(low=np.array([-100, -10]), high=np.array([200, 10]))
         act_dim = 2
     elif args.action_type == 0:
-        low_action_space = Discrete(action_num)
+        action_space = Discrete(action_num)
         act_dim = 1
-    meta_action_space = Discrete(30)
     device = 'cpu' # spinning up mpi tools only support cpu 
     print('device', device)
     
     local_epoch_step = int(args.epoch_step / args.cpu)
-    meta_policy = PPO(state_shape, meta_action_space, pi_lr=args.pi_lr, v_lr=args.v_lr, device=device, 
+    policy = PPO(state_shape, action_space, pi_lr=args.pi_lr, v_lr=args.v_lr, device=device, 
                 entropy_c = args.entropy_c,logger=logger, clip_ratio=args.clip_ratio, 
                 train_pi_iters=args.train_pi_iters, train_v_iters=args.train_v_iters, 
                 target_kl=args.target_kl, save_path=args.save_path, max_grad_norm=args.max_grad_norm, 
                 max_size=int(local_epoch_step), batch_size=int(args.epoch_step/args.mini_batch))
-    sync_params(meta_policy.ac) # Sync params across processes
-    logger.setup_pytorch_saver(meta_policy.ac)
+    sync_params(policy.ac) # Sync params across processes
+    logger.setup_pytorch_saver(policy.ac)
     
     # Count variables
-    var_counts = tuple(count_vars(module) for module in [meta_policy.ac.pi, meta_policy.ac.v])
+    var_counts = tuple(count_vars(module) for module in [policy.ac.pi, policy.ac.v])
     logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
 
-    info_dim = 14
-    buffer = PPOBuffer(state_shape, act_dim, info_dim, local_epoch_step, device, args.gamma, args.lamda)    
+    buffer = PPOBuffer(state_shape, act_dim, local_epoch_step, device, args.gamma, args.lamda)    
     if args.load:
-        meta_policy.load_models(args.load_dir, args.load_index)
+        policy.load_models(args.load_dir, args.load_index)
         print('load_model')
         if args.load_opponent_index > 0:
-            opponent = rl_opponent(state_shape, meta_action_space, device)
+            opponent = rl_opponent(state_shape, action_space, device)
             load_path = os.path.join(args.load_dir, f'actor_{args.load_opponent_index}.pth')
             opponent.load_model(load_path)
             print('load_opponent')
         else:
-            opponent = random_opponent(meta_action_space)
+            opponent = random_opponent(action_space)
     else:
-        opponent = random_opponent(meta_action_space)
+        opponent = random_opponent(action_space)
 
-    runner = Runner(args, env, meta_policy, opponent, buffer, logger, device, low_action_space, act_dim)
+    runner = Runner(args, env, policy, opponent, buffer, logger, device, action_space, act_dim)
 
     runner.rollout(args.train_epoch)
 

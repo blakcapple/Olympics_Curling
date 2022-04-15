@@ -13,9 +13,9 @@ class PPO:
 
     def __init__(self, state_shape, action_space, pi_lr, v_lr, device, logger, max_size, 
                 batch_size, clip_ratio=0.2, entropy_c=0, train_pi_iters=80, train_v_iters=80, 
-                target_kl=0.01, max_grad_norm=0.5, save_path='data/models', info_dim=None):
+                target_kl=0.01, max_grad_norm=0.5, save_path='data/models'):
 
-        self.ac = CNNActorCritic(state_shape, action_space, info_dim=info_dim).to(device)
+        self.ac = CNNActorCritic(state_shape, action_space).to(device)
         self.clip_ratio = clip_ratio
         self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
         self.v_optimizer = Adam(self.ac.v.parameters(), lr=v_lr)
@@ -33,9 +33,9 @@ class PPO:
     def compute_loss_pi(self, data):
         
         data = deepcopy(data)
-        obs, info, act, adv, logp_old = data['obs'], data['info'], data['act'], data['adv'], data['logp']
+        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
         # Policy loss
-        pi, logp = self.ac.pi(obs, info, act)
+        pi, logp = self.ac.pi(obs, act)
         ratio = torch.exp(logp - logp_old)
         clip_adv = torch.clamp(ratio, 1-self.clip_ratio, 1+self.clip_ratio) * adv
         loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
@@ -54,9 +54,9 @@ class PPO:
     def compute_loss_v(self, data):
         
         data = deepcopy(data)
-        obs, info, ret = data['obs'], data['info'], data['ret']
+        obs, ret = data['obs'], data['ret']
 
-        return ((self.ac.v(obs, info) - ret)**2).mean()
+        return ((self.ac.v(obs) - ret)**2).mean()
 
     def learn(self, data):
 
@@ -121,9 +121,14 @@ class PPO:
         
         return a 
 
-    def step(self, obs, info):
+    def step(self, obs):
 
-        a, v, logp = self.ac.step(obs, info)
+        a, v, logp = self.ac.step(obs)
 
         return a, v, logp 
-
+    
+    def set_mode(self, mode='train'):
+        if mode == 'train':
+            self.ac.train()
+        elif mode == 'eval':
+            self.ac.eval()

@@ -14,7 +14,7 @@ class random_opponent:
     def seed(self, seed = None):
         random.seed(seed)
 
-    def act(self, obs, info):
+    def act(self, obs):
         if isinstance(self.action_space, Discrete):
             a = random.randint(0, self.action_space.n-1)
 
@@ -32,9 +32,9 @@ class rl_opponent:
         elif isinstance(action_space, Discrete):
             self.actor = CNNCategoricalActor(state_shape, action_space.n, nn.ReLU).to(device)
 
-    def act(self, obs, info):
+    def act(self, obs):
 
-        pi, _ = self.actor(obs, info)
+        pi, _ = self.actor(obs)
         a_raw = pi.sample()
         
         return a_raw.detach().cpu().numpy()

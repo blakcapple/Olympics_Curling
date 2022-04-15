@@ -36,11 +36,6 @@ def get_reward(pos, center):
 
 class Runner:
 
-    fix_forward_count = 21
-    fix_forward_force = 50
-    fix_backward_force = -100
-    fix_backward_count = 24
-
     def __init__(self, args, env, agent, buffer, logger, device, 
                 action_space, act_dim):
         
@@ -148,6 +143,7 @@ class Runner:
                 action_end = True if release else False # 冰球投掷出去后，不受动作控制
                 # 在没有过释放冰球前正常采取动作，释放冰球后，所有动作将无效
                 if not action_end:
+                    self.agent.policy.set_mode('eval')
                     extra_info = self.agent.get_info()
                     a, v, logp = self.agent.choose_action(obs,'purple',throws_left, goal=self.goal)
                     self.agent.step(self.actions_map[a.item()])
@@ -159,7 +155,7 @@ class Runner:
                 next_action_end = True if next_release else False
                 # 记忆临界状态
                 if next_action_end and not stored_temp:
-                    temp_experience = [self.agent.obs_sequence, extra_info, a, 0, v, logp]
+                    temp_experience = [self.agent.obs_sequence[-1], extra_info, a, 0, v, logp]
                     stored_temp = True 
                 if info == 'round_end' or info == 'game1_end' or info == 'game2_end' :
                     false_d = True
@@ -182,7 +178,7 @@ class Runner:
                         self.logger.store(VVals=temp_experience[4])
                         t += 1
                     else:
-                        self.buffer.store(self.agent.obs_sequence, extra_info, a, reward, v, logp)
+                        self.buffer.store(self.agent.obs_sequence[-1], extra_info, a, reward, v, logp)
                         self.logger.store(VVals=v)
                         t += 1
                 ep_len += 1
@@ -209,6 +205,7 @@ class Runner:
 
             data = self.buffer.get()
             # update policy
+            self.agent.policy.set_mode('train')
             self.agent.policy.learn(data)
             # goalx = np.random.randint(250, 350)
             # goaly = np.random.randint(450, 550)

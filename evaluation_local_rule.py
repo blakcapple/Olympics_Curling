@@ -3,8 +3,11 @@ import numpy as np
 import torch
 import random
 from agents.rl.submission_rule import agent
-from agents.rl.submission_origin import agent as agent_base
+# from agents.rl.submission_origin import agent as agent_base
 # from agents.rl.submission_center import agent as agent_base
+# from agents.rl.submission import agent as agent_base
+from agents.rl.submission_rule_oppo import agent as agent_base 
+# from agents.rl.submission_1 import agent as agent
 from env.chooseenv import make
 from tabulate import tabulate
 import argparse
@@ -27,8 +30,12 @@ def get_join_actions(state, algo_list):
 
             obs = state[agent_idx]['obs']
             index = state[agent_idx]['controlled_player_index']
-            throws_left = state[agent_idx]['throws left'][agent_idx]
+            throws_left = state[agent_idx]['throws left']
             color = state[agent_idx]['team color']
+            score_point = state[agent_idx]['score']
+            game_round = state[agent_idx]['game round']
+            agent_base.set_game_information(score_point, game_round)
+            agent_base.set_agent_idx(index)
             obs = np.array(obs)
             actions = agent_base.choose_action(obs, throws_left, color, True)
             # actions = agent_base.choose_action(obs, throws_left, True)
@@ -119,5 +126,6 @@ if __name__ == "__main__":
     # random.seed(1)
 
     agent_list = [args.opponent, args.my_ai]        #your are controlling agent green
+    # agent_list = [args.my_ai, args.opponent]
     run_game(game, algo_list=agent_list, episode=args.episode, verbose=False)
 
