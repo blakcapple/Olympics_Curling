@@ -72,6 +72,7 @@ def run_game(env, algo_list, episode, verbose=False):
         state = env.reset()
         if RENDER:
             env.env_core.render()
+            pdb.set_trace()
         step = 0
 
         while True:
@@ -113,8 +114,8 @@ def run_game(env, algo_list, episode, verbose=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--my_ai", default='rl_base', help='rl/random')
-    parser.add_argument("--opponent", default='rl', help='rl/random')
+    parser.add_argument("--my_ai", default='rl', help='rl/random')
+    parser.add_argument("--opponent", default='rl_base', help='rl/random')
     parser.add_argument("--episode", default=1)
     args = parser.parse_args()
 

@@ -1,7 +1,4 @@
-"""
-该文件包含了底层控制的智能体
-"""
-import enum
+from tkinter.messagebox import NO
 from numpy import newaxis
 import torch.nn as nn
 import torch 
@@ -12,7 +9,26 @@ from gym.spaces import Box, Discrete
 import math 
 from copy import deepcopy
 import pdb
-import torch.nn.functional as F
+
+class PredictNet(nn.Module):
+    """
+    网络：根据观察到的点，预测冰壶位置
+    """
+    def __init__(self):
+        super().__init__()
+        self.linear_layer = mlp([2]+[64]+[64]+[2], nn.LeakyReLU)
+
+    def forward(self, input):
+        out = self.linear_layer(input)
+        return out
+    
+    def save_model(self, pth):
+
+        torch.save(self.state_dict(), pth)
+    
+    def load_model(self, pth):
+
+        self.load_state_dict(torch.load(pth))
 
 ##----------------------------------------------
 ##---This block is for rule helper----
@@ -41,8 +57,8 @@ def calculate_pos(obs, colour, ego_pos=[300, 186]):
 
     for i, point_group in enumerate(color_group):
         if len(point_group) > 0:
-            x_mean = np.mean([point_group[i][0] for i in range(len(point_group))])
-            y_mean = np.mean([point_group[i][1] for i in range(len(point_group))])
+            x_mean = np.median([point_group[i][0] for i in range(len(point_group))])
+            y_mean = np.median([point_group[i][1] for i in range(len(point_group))])
             color_pos.append([x_mean, y_mean])
     relative_pos = color_pos
     real_pos = []
@@ -50,7 +66,7 @@ def calculate_pos(obs, colour, ego_pos=[300, 186]):
         pos_x = 450 - pos[1]*scalar_x
         pos_y = ego_pos[1]+30*scalar_y - pos[0]*scalar_y
         real_pos.append([pos_x, pos_y])
-    return real_pos
+    return relative_pos, real_pos
 
 ##------------------------------------------------------------
 
@@ -248,6 +264,7 @@ class LowController:
             actions = [[force, theta] for force in forces for theta in thetas]
             actions_map = {i:actions[i] for i in range(num)}
             self.actions_map = actions_map
+        self.predict_model = PredictNet()
         self.obs_sequence = None
         self.throw_left = 4
         self.ep_count = 0
@@ -299,6 +316,8 @@ class LowController:
         self.stage = 0
         self.last_throw = False
         self.first_throw = False
+
+        self.goal = [300, 500]
     
     def set_agent_idx(self, idx):
 
@@ -385,7 +404,7 @@ class LowController:
                 other_radius = math.atan2(delta[0], delta[1])
                 other_distance = np.linalg.norm(delta)
                 # 弧度差*距离 为撞击预留出一定的半径空间，防止撞击到别的冰壶
-                if np.abs(crush_radius-other_radius)*other_distance <= 36: # 这里的判断可以更加精准一点
+                if np.abs(crush_radius-other_radius)*other_distance <= 38: # 这里的判断可以更加精准一点
                     crash_way = 1
                     break
                 else: crash_way = 0
@@ -395,27 +414,42 @@ class LowController:
         """
         得到基于规则的动作
         """
-        # 对撞击点做修正
-        if self.crash_pos[0] > 300:
-            crash_pos = [self.crash_pos[0] - 3, self.crash_pos[1]]
-        else:
-            crash_pos = [self.crash_pos[0] + 3, self.crash_pos[1]]
+        # # # 对撞击点做修正
+        # if np.abs(self.crash_pos[0] - 300) < 1:
+        #     crash_pos =  [self.crash_pos[0], self.crash_pos[1]]
+        # elif self.crash_pos[0] > 300:
+        #     crash_pos = [self.crash_pos[0] - 3, self.crash_pos[1]]
+        # else:
+        #     crash_pos = [self.crash_pos[0] + 3, self.crash_pos[1]]
+        crash_pos =  [self.crash_pos[0], self.crash_pos[1]]
         if crash_way == 0:
-            # 让智能体完成对目标位置的转向
+            # 往上移动一段距离
             if self.stage == 1:
+                if self.pose[1] > 130:
+                    actions = [-50,0]
+                elif self.pose[1] < 130:
+                    # 比例控制减速到零
+                    k_gain = 15
+                    force = k_gain*(0-self.v[1])
+                    force = np.clip(force, -100, 200)
+                    actions = [force,0]
+                    if np.abs(self.v[1])<0.1: 
+                        self.stage = 2
+            # 让智能体完成对目标位置的转向
+            if self.stage == 2:
                 delta = np.array(crash_pos) - np.array(self.pose)
                 delta = delta.reshape(-1)
                 radius = math.atan2(delta[0], delta[1])
                 delta_theta = math.degrees(radius)
                 self.goal_theta  = self.theta - delta_theta
-                self.stage = 2
-            if self.stage == 2:
+                self.stage = 3
+            if self.stage == 3:
                 if self.theta != self.goal_theta:
                     theta = self.goal_theta - self.theta
                     theta = np.clip(theta, -30, 30)
                     actions  = [0, theta]
-                else: self.stage = 3
-            if self.stage == 3:
+                else: self.stage = 4
+            if self.stage == 4:
                 actions = [200, 0]
         elif crash_way == 1:
             if self.stage == 1:
@@ -425,7 +459,7 @@ class LowController:
                 if len(self.own_pos) > 0:
                     min_distance = 1e4
                     for pos in self.own_pos:
-                        delta = np.array(pos) - np.array(crash_pos)
+                        delta = np.array(pos) - np.array([300, 500])
                         other_distance = np.linalg.norm(delta)
                         if other_distance < min_distance:
                             min_distance = other_distance
@@ -578,8 +612,19 @@ class LowController:
         """
         crash_pos = None
         opponent_color = 'green' if color=='purple' else 'purple'
-        self.oppo_pos = calculate_pos(obs.reshape(30, 30), opponent_color, self.pose)
-        self.own_pos = calculate_pos(obs.reshape(30, 30), color, self.pose)
+        with torch.no_grad():
+            relative_oppo_pos, oppo_pos = calculate_pos(obs.reshape(30, 30), opponent_color, self.pose)
+            self.oppo_pos = oppo_pos
+            # if len(relative_oppo_pos) > 0:
+            #     self.oppo_pos = self.predict_model(torch.FloatTensor(relative_oppo_pos)).numpy()
+            #     self.oppo_pos = self.oppo_pos.tolist()
+            # else: self.oppo_pos = []
+            relative_own_pos, team_pos = calculate_pos(obs.reshape(30, 30), color, self.pose)
+            self.own_pos = team_pos
+            # if len(relative_own_pos) > 0:
+            #     self.own_pos = self.predict_model(torch.FloatTensor(relative_own_pos)).numpy()
+            #     self.own_pos = self.own_pos.tolist()
+            # else: self.own_pos = []
         if len(self.oppo_pos) > 0:
             oppo_temp = deepcopy(self.oppo_pos)
             # 选择距离中心点最近的对手作为撞击对象
@@ -609,21 +654,20 @@ class LowController:
             self.last_throw = True
         if self.throw_left == 3 and throw_left[1-self.agent_idx] == 4:
             self.first_throw = True
-        self.first_throw = False # 屏蔽 
-        self.last_throw = False # 屏蔽
         if self.first_throw:
-            # 加载新策略,仅用于第一个回合
-            if self.pose[1] < 310:
-                actions = [15, 0]
-            elif np.abs(self.v[1] - 16) >= 0.1:
-                k_gain = 15
-                force = -k_gain*(self.v[1] - 16)
-                force = np.clip(force, -100, 200)
-                actions = [force, 0]
-            else:
-                actions = [0,0]
-            self.ep_count += 1
-            return actions
+            # # 加载新策略,仅用于第一个回合
+            # if self.pose[1] < 310:
+            #     actions = [15, 0]
+            # elif np.abs(self.v[1] - 16) >= 0.1:
+            #     k_gain = 15
+            #     force = -k_gain*(self.v[1] - 16)
+            #     force = np.clip(force, -100, 200)
+            #     actions = [force, 0]
+            # else:
+            #     actions = [0,0]
+            # self.ep_count += 1
+            # return actions
+            self.goal = [430, 620]
         if self.ep_count <= self.fix_forward_count+self.fix_backward_count:
             if self.ep_count <=self.fix_forward_count:
                 actions = [self.fix_forward_force,0]
@@ -644,16 +688,20 @@ class LowController:
                 if self.crash_pos is not None:
                     self.crash_way = self._get_crash_way(self.crash_pos)
         if self.stage != 0:
-            if self.last_throw == True:
-                if self.game_round == 1:
-                    point = self._current_point()
-                    # 如果判断已经稳赢的情况下，则不做任何动作，避免风险
-                    if self.score[self.agent_idx]+point > self.score[1-self.agent_idx]:
-                        self.ep_count += 1
-                        return [0,0]
-            if self.crash_pos is not None and not self.policy:
-                actions = self.get_rule_action(self.crash_way)
-            else:
+            if self.policy == 0: 
+                if self.crash_pos is not None:
+                    actions = self.get_rule_action(self.crash_way)
+                else:
+                    if self.throw_left == 3:
+                        self.goal = [180, 630]
+                    elif self.throw_left == 2:
+                        self.goal = [420, 630]
+                    elif self.throw_left == 1:
+                        self.goal = [280, 630]
+                    elif self.throw_left == 0:
+                        self.goal = [300, 500]
+                    actions = self.get_model_action(deterministic)
+            else: 
                 actions = self.get_model_action(deterministic)
         self.ep_count += 1
         return actions 
@@ -712,7 +760,7 @@ class LowController:
                 if mindist > distance:
                     point += 1
         if point == 0:
-            if len(self.oppo_pos) > 0:
+            if len(self.own_pos) > 0:
                 mindist = self._get_mindist(self.own_pos)
             else:
                 mindist = 67
@@ -745,5 +793,6 @@ discrete_space = Discrete(action_num)
 load_model_pth = os.path.dirname(os.path.abspath(__file__)) + "/actor.pth"
 low_controller = LowController(state_shape, discrete_space)
 low_controller.load_model(load_model_pth)
+
 
 

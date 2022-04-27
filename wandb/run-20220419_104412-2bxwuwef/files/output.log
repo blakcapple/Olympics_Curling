@@ -1,0 +1,34 @@
+> /home/ryd/JIDI_Competition/rl_trainer/sp_train.py(59)train()
+-> pos_x = 450 - input[:,1]*10.5
+[?2004h(Pdb) pos_x
+*** NameError: name 'pos_x' is not defined
+[?2004h(Pdb) n
+> /home/ryd/JIDI_Competition/rl_trainer/sp_train.py(60)train()
+-> pos_y = 285.7940875237164 +30*10.5 - input[:,0]*10.5
+[?2004h(Pdb) n
+> /home/ryd/JIDI_Competition/rl_trainer/sp_train.py(61)train()
+-> rule_predict = torch.tensor([pos_x, pos_y])
+[?2004h(Pdb) pos_x
+tensor([366.0000, 355.5000, 198.0000,  ..., 240.0000, 313.5000, 198.0000],
+       device='cuda:0')
+
+[?2004h(Pdb) pos_x.shape
+torch.Size([3306])
+[?2004h(Pdb) n
+ValueError: only one element tensors can be converted to Python scalars
+> /home/ryd/JIDI_Competition/rl_trainer/sp_train.py(61)train()
+-> rule_predict = torch.tensor([pos_x, pos_y])
+
+
+
+(Pdb) q
+[?2004l
+Traceback (most recent call last):
+  File "rl_trainer/sp_train.py", line 121, in <module>
+  File "rl_trainer/sp_train.py", line 61, in train
+    truth = test_data[:,1]
+  File "/home/ryd/miniconda3/envs/spinningup/lib/python3.6/bdb.py", line 57, in trace_dispatch
+    return self.dispatch_exception(frame, arg)
+  File "/home/ryd/miniconda3/envs/spinningup/lib/python3.6/bdb.py", line 113, in dispatch_exception
+    if self.quitting: raise BdbQuit
+bdb.BdbQuit

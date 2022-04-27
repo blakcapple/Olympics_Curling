@@ -1,5 +1,3 @@
-
-import enum
 from numpy import newaxis
 import torch.nn as nn
 import torch 
@@ -10,7 +8,6 @@ from gym.spaces import Box, Discrete
 import math 
 from copy import deepcopy
 import pdb
-import torch.nn.functional as F
 
 ##----------------------------------------------
 ##---This block is for rule helper----
@@ -40,8 +37,8 @@ def calculate_pos(obs, colour, ego_pos=[300, 186]):
 
     for i, point_group in enumerate(color_group):
         if len(point_group) > 0:
-            x_mean = np.mean([point_group[i][0] for i in range(len(point_group))])
-            y_mean = np.mean([point_group[i][1] for i in range(len(point_group))])
+            x_mean = np.median([point_group[i][0] for i in range(len(point_group))])
+            y_mean = np.median([point_group[i][1] for i in range(len(point_group))])
             color_pos.append([x_mean, y_mean])
     relative_pos = color_pos
     real_pos = []
@@ -231,7 +228,7 @@ class RLAgent:
     fix_observe_count = 24
     fix_stop_length = 25 # 减速到零的滑行距离
 
-    def __init__(self, state_shape, action_space):
+    def __init__(self, state_shape, action_space, policy='rule'):
         
         if isinstance(action_space, Box):
             self.is_act_continuous = True
@@ -269,11 +266,13 @@ class RLAgent:
         # 智能体的模型集合
         self.model_dict = dict()
         # 要撞击的目标位置
-        self.crush_pos = None
-        # 撞击的方式
-        self.crush_way = None 
+        self.crash_pos = None
         # 目标点
         self.goal = [300, 500]
+        # 打击方式
+        self.crash_way = 0
+        # 策略：规则 0 RL 1
+        self.policy = 0 if policy == 'rule' else 1
 
     def set_model_dict(self, pth, name='normal'):
 
@@ -296,6 +295,8 @@ class RLAgent:
         self.stage = 0
         self.last_throw = False
         self.first_throw = False
+
+        self.goal = [300, 500]
     
     def set_agent_idx(self, idx):
 
@@ -360,56 +361,111 @@ class RLAgent:
         actions = self.actions_map[a_raw.item()]
         return actions
 
-    def get_rule_action(self, crush_pos):
+    def _get_crash_way(self, crash_pos):
         """
-        得到基于规则的动作
+        判断击打方式
         """
+        crash_way = None
         # 计算路线角度
-        delta = np.array(crush_pos) - np.array(self.pose)
+        delta = np.array(crash_pos) - np.array(self.pose)
         delta = delta.reshape(-1)
         crush_radius = math.atan2(delta[0], delta[1])
-        other_pos = deepcopy(self.own_pos + self.oppo_pos)
-        other_pos.remove(crush_pos)
-        if len(other_pos) == 0:
-            self.crush_way = 0
-        if crush_pos[0] < 200 or crush_pos[0] > 400:
-            self.crush_way = 2
-        if self.crush_way == None :
-            for pos in other_pos:
+        self.other_pos = deepcopy(self.own_pos + self.oppo_pos)
+        self.other_pos.remove(crash_pos)
+        if len(self.other_pos) == 0:
+            crash_way = 0
+        if crash_pos[0] < 200 or crash_pos[0] > 400:
+            crash_way = 2
+        if crash_way == None :
+            for pos in self.other_pos:
                 delta = np.array(pos) - np.array(self.pose)
                 delta = delta.reshape(-1)
                 other_radius = math.atan2(delta[0], delta[1])
                 other_distance = np.linalg.norm(delta)
-                # 路线角度差在5度之内
-                if np.abs(crush_radius-other_radius)*other_distance <= 20: # 这里的判断可以更加精准一点
-                    self.crush_way = 1
+                # 弧度差*距离 为撞击预留出一定的半径空间，防止撞击到别的冰壶
+                if np.abs(crush_radius-other_radius)*other_distance <= 38: # 这里的判断可以更加精准一点
+                    crash_way = 1
                     break
-                else: self.crush_way = 0
-        # 对撞击点做修正
-        if crush_pos[0] > 300:
-            crush_pos = [crush_pos[0] - 3, crush_pos[1]]
-        else:
-            crush_pos = [crush_pos[0] + 3, crush_pos[1]]
-        if self.crush_way == 0:
-            # 让智能体完成对目标位置的转向
+                else: crash_way = 0
+        return crash_way
+
+    def get_rule_action(self, crash_way):
+        """
+        得到基于规则的动作
+        """
+        # # # 对撞击点做修正
+        # if np.abs(self.crash_pos[0] - 300) < 1:
+        #     crash_pos =  [self.crash_pos[0], self.crash_pos[1]]
+        # elif self.crash_pos[0] > 300:
+        #     crash_pos = [self.crash_pos[0] - 3, self.crash_pos[1]]
+        # else:
+        #     crash_pos = [self.crash_pos[0] + 3, self.crash_pos[1]]
+        crash_pos =  [self.crash_pos[0], self.crash_pos[1]]
+        if crash_way == 0:
+            # 往上移动一段距离
             if self.stage == 1:
-                delta = np.array(crush_pos) - np.array(self.pose)
+                if self.pose[1] > 130:
+                    actions = [-50,0]
+                elif self.pose[1] < 130:
+                    # 比例控制减速到零
+                    k_gain = 15
+                    force = k_gain*(0-self.v[1])
+                    force = np.clip(force, -100, 200)
+                    actions = [force,0]
+                    if np.abs(self.v[1])<0.1: 
+                        self.stage = 2
+            # 让智能体完成对目标位置的转向
+            if self.stage == 2:
+                delta = np.array(crash_pos) - np.array(self.pose)
                 delta = delta.reshape(-1)
                 radius = math.atan2(delta[0], delta[1])
                 delta_theta = math.degrees(radius)
                 self.goal_theta  = self.theta - delta_theta
-                self.stage = 2
-            if self.stage == 2:
+                self.stage = 3
+            if self.stage == 3:
                 if self.theta != self.goal_theta:
                     theta = self.goal_theta - self.theta
                     theta = np.clip(theta, -30, 30)
                     actions  = [0, theta]
-                else: self.stage = 3
-            if self.stage == 3:
+                else: self.stage = 4
+            if self.stage == 4:
                 actions = [200, 0]
-        elif self.crush_way == 1:
+        elif crash_way == 1:
             if self.stage == 1:
-                if crush_pos[0] > self.pose[0]:
+                other_oppo_pos = deepcopy(self.oppo_pos)
+                other_oppo_pos.remove(self.crash_pos)
+                # 选择打击移动方向 
+                if len(self.own_pos) > 0:
+                    min_distance = 1e4
+                    for pos in self.own_pos:
+                        delta = np.array(pos) - np.array([300, 500]) # 防止打击到离中心点最近的自己的冰壶
+                        other_distance = np.linalg.norm(delta)
+                        if other_distance < min_distance:
+                            min_distance = other_distance
+                            min_team_pos = pos
+                    delta_team = np.array(min_team_pos) - np.array(crash_pos) 
+                    if np.prod(delta_team) < 0:
+                        self.goal_theta = 180
+                        self.goal_v = -70
+                    else:
+                        self.goal_theta = 0
+                        self.goal_v = 70
+                elif len(other_oppo_pos) > 0:
+                    min_distance = 1e4
+                    for pos in other_oppo_pos:
+                        delta = np.array(pos) - np.array(crash_pos)
+                        other_distance = np.linalg.norm(delta)
+                        if other_distance < min_distance:
+                            min_distance = other_distance
+                            min_oppo_pos = pos
+                    delta_oppo = np.array(min_oppo_pos) - np.array(crash_pos) 
+                    if np.prod(delta_oppo) > 0:
+                        self.goal_theta = 0
+                        self.goal_v = 70
+                    else:
+                        self.goal_theta = 180
+                        self.goal_v = -70
+                elif crash_pos[0] > 300:
                     self.goal_theta = 0
                     self.goal_v = 70
                 else: 
@@ -438,15 +494,15 @@ class RLAgent:
                         future_pose = [self.pose[0] + self.fix_stop_length, self.pose[1]] 
                     else:
                         future_pose = [self.pose[0] - self.fix_stop_length, self.pose[1]] 
-                    delta = np.array(crush_pos) - np.array(future_pose)
+                    delta = np.array(crash_pos) - np.array(future_pose)
                     delta = delta.reshape(-1)
                     crush_radius = math.atan2(delta[0], delta[1])
-                    for pos in other_pos:
+                    for pos in self.other_pos:
                         delta = np.array(pos) - np.array(future_pose)
                         delta = delta.reshape(-1)
                         other_radius = math.atan2(delta[0], delta[1])
                         other_distance = np.linalg.norm(delta)
-                        if np.abs(crush_radius-other_radius) * other_distance <= 20:
+                        if np.abs(crush_radius-other_radius) * other_distance <= 36:
                             ready_crush = False
                             break
                         else: ready_crush=True
@@ -463,7 +519,7 @@ class RLAgent:
                 if np.abs(self.v[0] - 0) < 0.1:
                     self.stage = 5
             if self.stage == 5:
-                delta = np.array(crush_pos) - np.array(self.pose)
+                delta = np.array(crash_pos) - np.array(self.pose)
                 delta = delta.reshape(-1)
                 radius = math.atan2(delta[0], delta[1])
                 delta_theta = math.degrees(radius)
@@ -477,9 +533,9 @@ class RLAgent:
                 else: self.stage = 7
             if self.stage == 7:
                 actions = [200, 0]
-        elif self.crush_way == 2:
+        elif crash_way == 2:
             if self.stage == 1:
-                if crush_pos[0] > self.pose[0]:
+                if crash_pos[0] > 300:
                     self.goal_theta = 0
                     self.goal_v = 70
                 else: 
@@ -504,7 +560,7 @@ class RLAgent:
                 actions = [force, 0]
                 ready_crush = False
                 if np.abs(self.v[0] - self.goal_v) < 1:
-                    if np.abs(self.pose[0] - crush_pos[0])< self.fix_stop_length+12:
+                    if np.abs(self.pose[0] - crash_pos[0])< self.fix_stop_length+12:
                         self.stage = 4
             if self.stage == 4:
                 # 比例控制减速到零
@@ -533,7 +589,7 @@ class RLAgent:
         """
         存储有价值的冰壶位置信息
         """
-        crush_pos = None
+        crash_pos = None
         opponent_color = 'green' if color=='purple' else 'purple'
         self.oppo_pos = calculate_pos(obs.reshape(30, 30), opponent_color, self.pose)
         self.own_pos = calculate_pos(obs.reshape(30, 30), color, self.pose)
@@ -546,10 +602,10 @@ class RLAgent:
                     dist = np.linalg.norm([pos[0] - 300, pos[1] - 500])
                     if dist < min_dist:
                         min_dist = dist
-                        crush_pos = pos
-            elif len(oppo_temp) > 0:crush_pos = oppo_temp[0]
-            else: crush_pos=None
-        return crush_pos
+                        crash_pos = pos
+            elif len(oppo_temp) > 0:crash_pos = oppo_temp[0]
+            else: crash_pos=None
+        self.crash_pos = crash_pos
 
     def choose_action(self, obs, throw_left, color, deterministic=False):
         state = torch.from_numpy(obs).float() # [1, 25, 25]
@@ -566,20 +622,20 @@ class RLAgent:
             self.last_throw = True
         if self.throw_left == 3 and throw_left[1-self.agent_idx] == 4:
             self.first_throw = True
-        self.first_throw = False    
         if self.first_throw:
-            # 加载新策略,仅用于第一个回合
-            if self.pose[1] < 310:
-                actions = [15, 0]
-            elif np.abs(self.v[1] - 16) >= 0.1:
-                k_gain = 15
-                force = -k_gain*(self.v[1] - 16)
-                force = np.clip(force, -100, 200)
-                actions = [force, 0]
-            else:
-                actions = [0,0]
-            self.ep_count += 1
-            return actions
+            # # 加载新策略,仅用于第一个回合
+            # if self.pose[1] < 310:
+            #     actions = [15, 0]
+            # elif np.abs(self.v[1] - 16) >= 0.1:
+            #     k_gain = 15
+            #     force = -k_gain*(self.v[1] - 16)
+            #     force = np.clip(force, -100, 200)
+            #     actions = [force, 0]
+            # else:
+            #     actions = [0,0]
+            # self.ep_count += 1
+            # return actions
+            self.goal = [430, 620]
         if self.ep_count <= self.fix_forward_count+self.fix_backward_count:
             if self.ep_count <=self.fix_forward_count:
                 actions = [self.fix_forward_force,0]
@@ -587,7 +643,7 @@ class RLAgent:
                 actions = [self.fix_backward_force, 0]
                 # 判断场上对方的位置信息（只做一次）
                 if self.ep_count == self.fix_observe_count:
-                    self.crush_pos = self._store_oppo_pos(color, obs)
+                    self._store_oppo_pos(color, obs)
         # 让智能体先停止下来(比例控制)
         elif self.stage == 0:
             if np.abs(self.v[1] - 0) >= 0.1:
@@ -597,27 +653,27 @@ class RLAgent:
                 actions = [force, 0]
             else: 
                 self.stage = 1
+                if self.crash_pos is not None:
+                    self.crash_way = self._get_crash_way(self.crash_pos)
         if self.stage != 0:
-            if self.last_throw == True:
-                # win = self._current_winner()
-                if self.game_round == 1:
-                    point = self._current_point()
-                    # 如果判断已经稳赢的情况下，则不做任何动作，避免风险
-                    if self.score[self.agent_idx]+point > self.score[1-self.agent_idx]:
-                        self.ep_count += 1
-                        return [0,0]
-                # if win:
-                #     self.crush_pos = None
-            self.crush_pos = None            
-            if self.crush_pos is not None:
-                actions = self.get_rule_action(self.crush_pos)
+            # if self.last_throw == True:
+            #     if self.game_round == 1:
+            #         point = self._current_point()
+            #         # 如果判断已经稳赢的情况下，则不做任何动作，避免风险
+            #         if self.score[self.agent_idx]+point > self.score[1-self.agent_idx]:
+            #             self.ep_count += 1
+            #             return [0,0]
+            if self.crash_pos is not None:
+                actions = self.get_rule_action(self.crash_way)
             else:
                 if self.throw_left == 3:
-                    self.goal = [300, 460]
+                    self.goal = [400, 600]
                 elif self.throw_left == 2:
+                    self.goal = [180, 650]
+                elif self.throw_left == 1:
+                    self.goal = [300, 650]
+                elif self.throw_left == 0:
                     self.goal = [300, 500]
-                else:
-                    self.goal = [300, 543]
                 actions = self.get_model_action(deterministic)
         self.ep_count += 1
         return actions 
@@ -629,47 +685,6 @@ class RLAgent:
     def save_model(self, pth):
 
         self.actor.save_model(pth)
-
-    def decide_model(self):
-        """
-        根据场上的信息来选择用哪个模型
-        """
-        win = self._current_winner()
-        record = []
-        load_name = None
-        if win:
-            if self.throw_left == 0:
-                load_name = 'center'
-                return load_name
-            if len(self.oppo_pos) > 0:
-                for pos in self.oppo_pos:
-                    if np.abs(pos[0] - 300) < 10:
-                        load_name = 'right'
-                        break
-            if len(self.own_pos) > 0 and load_name !='right':
-                for point in self.own_pos:
-                    if point[0] > 300:
-                        if point[1] > 500:
-                            record.append('right_down')
-                        if point[0] < 500:
-                            record.append('right_up')
-                    elif point[0] < 300:
-                        if point[1] > 500:
-                            record.append('left_down')
-                        if point[0] < 500:
-                            record.append('left_up')
-                if 'right_down' not in record:
-                    load_name = 'down'
-                elif 'right_up' not in record:
-                    load_name = 'right'
-                elif 'left_down' not in record:
-                    load_name = 'left'
-                elif 'left_up' not in record:
-                    load_name = 'up'
-                else: load_name = 'center'
-        else:
-            load_name = 'center'
-        return load_name
 
     def _current_winner(self):
         """
@@ -717,7 +732,7 @@ class RLAgent:
                 if mindist > distance:
                     point += 1
         if point == 0:
-            if len(self.oppo_pos) > 0:
+            if len(self.own_pos) > 0:
                 mindist = self._get_mindist(self.own_pos)
             else:
                 mindist = 67
@@ -727,6 +742,21 @@ class RLAgent:
                     if mindist > distance:
                         point -= 1
         return point 
+
+
+    def set_goal(self, goal):
+        """
+        设定冰壶落点目标
+        """
+        self.goal = goal 
+
+    def switch(self, policy):
+
+        if policy == 0:
+            self.policy = 0
+            self.goal = [300, 500]
+        elif policy == 1:
+            self.policy = 1
 
 state_shape = [4, 30, 30]
 action_num = 49
@@ -759,4 +789,3 @@ def my_controller(observation_list, action_space_list, is_act_continuous):
     # update physical information 
     agent.step([actions[0], actions[1]])
     return wrapped_actions
-

@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "rl_trainer/sp_train.py", line 119, in <module>
+    train(model, train_data, test_data, epoch=1, batch_size=256, device=device, lr=1e-4, test_interval=10)
+  File "rl_trainer/sp_train.py", line 70, in train
+    wandb.log({'test_error':test_error.item(), 'rule_error':rule_error.item()})
+ValueError: only one element tensors can be converted to Python scalars

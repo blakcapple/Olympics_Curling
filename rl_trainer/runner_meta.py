@@ -1,4 +1,3 @@
-
 from numpy import newaxis
 import torch 
 import numpy as np 
@@ -39,7 +38,7 @@ class Runner:
         self.env = env
         self.policy = policy
         self.buffer = buffer
-        self.logger = logger 
+        self.logger = logger
         self.ep_ret_history = [] 
         self.best_ep_ret = -np.inf
         self.device = device
