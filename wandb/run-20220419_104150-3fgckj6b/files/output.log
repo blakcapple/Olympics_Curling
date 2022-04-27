@@ -1,7 +1,0 @@
-> /home/ryd/JIDI_Competition/rl_trainer/sp_train.py(59)train()
--> pos_x = 450 - input[1]*10.5
-[?2004h(Pdb)
-[?2004h(Pdb) n
-> /home/ryd/JIDI_Competition/rl_trainer/sp_train.py(60)train()
--> pos_y = 285.7940875237164 +30*10.5 - input[0]*10.5
-

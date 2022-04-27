@@ -1,5 +1,0 @@
-device cuda:0
-pygame 2.0.2 (SDL 2.0.16, Python 3.9.6)
-Hello from the pygame community. https://www.pygame.org/contribute.html
-2022-02-18 20:02:48,239, INFO: model_score: tensor([], dtype=torch.float64)
-Backend TkAgg is interactive backend. Turning interactive mode on.
