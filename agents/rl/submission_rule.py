@@ -699,7 +699,7 @@ class RLAgent:
                 actions = self.get_rule_action(self.crash_way)
             else:
                 if self.throw_left == 3:
-                    self.goal = [300, 500]
+                    self.goal = [180, 630]
                 elif self.throw_left == 2:
                     self.goal = [420, 630]
                 elif self.throw_left == 1:
@@ -802,7 +802,7 @@ agent = RLAgent(state_shape, discrete_space)
 agent_base = RLAgent(state_shape, discrete_space)
 agent.load_model(load_model_pth)
 sp_model_pth = os.path.dirname(os.path.abspath(__file__)) + "/model_best"
-agent.predict_model.load_model(sp_model_pth)
+# agent.predict_model.load_model(sp_model_pth)
 
 
 def my_controller(observation_list, action_space_list, is_act_continuous):
